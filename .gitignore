@@ -1,4 +1,6 @@
 # fig
 *.jpg
 *.png
-.venv
+.venv/
+.idea/
+
