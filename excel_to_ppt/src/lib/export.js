@@ -1,11 +1,12 @@
 import pptxgen from 'pptxgenjs'
-import { colorFor, PALETTE, RELATION_GAP } from './layout.js'
+import { colorFor, createTreeColorMap, RELATION_GAP } from './layout.js'
 
 const PX_PER_INCH = 96
 const MAX_SLIDE_INCH = 56
 const MARGIN_INCH = 0.45
 
 export function treeToMermaid(root) {
+  const colors = createTreeColorMap(root)
   const lines = [
     '%%{init: {"theme":"base","themeVariables":{"background":"#FBFBF8","primaryTextColor":"#20231F","textColor":"#20231F","edgeLabelBackground":"#FBFBF8","fontFamily":"Microsoft YaHei, sans-serif","lineColor":"#8A8F86"},"themeCSS":".edgeLabel,.edgeLabel p,.edgeLabel div,.edgeLabel span,.edgeLabel foreignObject{background:transparent!important;color:#20231F!important}.edgeLabel foreignObject{transform-box:fill-box!important;transform:translateY(calc(-50% - 4px))!important;overflow:visible!important}.edgeLabel text,.edgeLabel tspan,.edgeLabel .label{fill:#20231F!important;color:#20231F!important}.edgeLabel rect{fill:none!important;stroke:none!important}","flowchart":{"curve":"basis","htmlLabels":true}}}%%',
     'flowchart LR',
@@ -17,12 +18,8 @@ export function treeToMermaid(root) {
 
   const declarePoints = (node, branchIndex = null) => {
     lines.push(`  ${node.id}(( ))`)
-    if (node === root) {
-      pointStyles.push(`  style ${node.id} fill:none,stroke:#20231F,stroke-width:2px;`)
-    } else {
-      const color = PALETTE[branchIndex % PALETTE.length]
-      pointStyles.push(`  style ${node.id} fill:none,stroke:${color},stroke-width:2px;`)
-    }
+    const color = colors.get(node.id).hex
+    pointStyles.push(`  style ${node.id} fill:none,stroke:${color},stroke-width:2px;`)
     node.children.forEach((child, index) => {
       const childBranch = node === root ? index : branchIndex
       declarePoints(child, childBranch)
@@ -31,14 +28,14 @@ export function treeToMermaid(root) {
   declarePoints(root)
 
   lines.push(`  origin ---|${escapeMermaid(root.label)}| ${root.id}`)
-  linkStyles.push('  linkStyle 0 stroke:#20231F,stroke-width:2px;')
+  linkStyles.push(`  linkStyle 0 stroke:${colors.get(root.id).hex},stroke-width:2px;`)
   linkIndex += 1
 
   const walk = (node, branchIndex = null) => {
     node.children.forEach((child) => {
       const childBranch = node === root ? node.children.indexOf(child) : branchIndex
       lines.push(`  ${node.id} ---|${escapeMermaid(child.label)}| ${child.id}`)
-      linkStyles.push(`  linkStyle ${linkIndex} stroke:${PALETTE[childBranch % PALETTE.length]},stroke-width:2px;`)
+      linkStyles.push(`  linkStyle ${linkIndex} stroke:${colors.get(child.id).hex},stroke-width:2px;`)
       linkIndex += 1
       walk(child, childBranch)
     })
@@ -109,7 +106,7 @@ export async function exportPptx(layout, baseName) {
       w: x2 - x1,
       h: 0,
       line: {
-        color: colorFor(node).slice(1),
+        color: colorFor(child).slice(1),
         width: Math.max(0.5, 1.1 * shrink),
         beginArrowType: 'none',
         endArrowType: 'none',

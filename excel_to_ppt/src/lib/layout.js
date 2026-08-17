@@ -1,6 +1,24 @@
 import { flattenTree } from './tree.js'
 
-export const PALETTE = ['#2176ae', '#ef476f', '#06a6a6', '#f78c23', '#7957d5', '#2a9d46', '#9a5a46']
+export const HSL_THEME = Object.freeze({
+  root: { h: 105, s: 6, l: 13 },
+  firstLevel: {
+    hueStart: 205,
+    hueSpan: 300,
+    saturation: 68,
+    lightness: 43,
+  },
+  secondLevel: {
+    saturationHigh: 74,
+    saturationLow: 62,
+  },
+  deeperLevels: {
+    lightnessStep: 6,
+    siblingVariation: 6,
+    minLightness: 34,
+    maxLightness: 64,
+  },
+})
 export const RELATION_GAP = {
   parentToBrace: 20,
   braceWidth: 26,
@@ -36,10 +54,9 @@ export function layoutTree(root) {
   position(root)
 
   const byId = Object.fromEntries(nodes.map((node) => [node.id, node]))
+  const colors = createTreeColorMap(root)
   nodes.forEach((node) => {
-    let branch = node
-    while (branch.parent && branch.parent.depth > 0) branch = byId[branch.parent.id]
-    node.branchOrder = branch.depth === 0 ? 0 : branch.order
+    node.color = colors.get(node.id)
   })
   const edges = nodes.filter((node) => node.parent).map((node) => ({
     source: byId[node.parent.id],
@@ -51,10 +68,101 @@ export function layoutTree(root) {
 }
 
 export function colorFor(node) {
-  if (node.depth === 0) return '#20231f'
-  return PALETTE[(node.branchOrder ?? node.order) % PALETTE.length]
+  return node.color?.hex || hslToHex(HSL_THEME.root)
+}
+
+export function createTreeColorMap(root) {
+  const colors = new Map()
+  colors.set(root.id, makeColor(HSL_THEME.root))
+
+  root.children.forEach((firstLevelNode, index) => {
+    const firstLevel = {
+      h: distributeHue(index, root.children.length),
+      s: HSL_THEME.firstLevel.saturation,
+      l: HSL_THEME.firstLevel.lightness,
+    }
+    assignColor(firstLevelNode, firstLevel)
+  })
+
+  return colors
+
+  function assignColor(node, hsl) {
+    colors.set(node.id, makeColor(hsl))
+    node.children.forEach((child, index) => {
+      let childHsl
+      if (child.depth === 2) {
+        childHsl = {
+          ...hsl,
+          s: spread(
+            index,
+            node.children.length,
+            HSL_THEME.secondLevel.saturationHigh,
+            HSL_THEME.secondLevel.saturationLow,
+          ),
+        }
+      } else {
+        const variation = spread(
+          index,
+          node.children.length,
+          HSL_THEME.deeperLevels.siblingVariation / 2,
+          -HSL_THEME.deeperLevels.siblingVariation / 2,
+        )
+        childHsl = {
+          ...hsl,
+          l: clamp(
+            hsl.l + HSL_THEME.deeperLevels.lightnessStep + variation,
+            HSL_THEME.deeperLevels.minLightness,
+            HSL_THEME.deeperLevels.maxLightness,
+          ),
+        }
+      }
+      assignColor(child, childHsl)
+    })
+  }
+}
+
+export function hslToHex({ h, s, l }) {
+  const saturation = s / 100
+  const lightness = l / 100
+  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation
+  const segment = (((h % 360) + 360) % 360) / 60
+  const secondary = chroma * (1 - Math.abs((segment % 2) - 1))
+  const offset = lightness - chroma / 2
+  let rgb
+
+  if (segment < 1) rgb = [chroma, secondary, 0]
+  else if (segment < 2) rgb = [secondary, chroma, 0]
+  else if (segment < 3) rgb = [0, chroma, secondary]
+  else if (segment < 4) rgb = [0, secondary, chroma]
+  else if (segment < 5) rgb = [secondary, 0, chroma]
+  else rgb = [chroma, 0, secondary]
+
+  return `#${rgb.map((channel) => Math.round((channel + offset) * 255).toString(16).padStart(2, '0')).join('')}`
 }
 
 function visualLength(text) {
   return [...text].reduce((length, char) => length + (/[^\u0000-\u00ff]/.test(char) ? 1 : 0.55), 0)
+}
+
+function distributeHue(index, count) {
+  if (count <= 1) return HSL_THEME.firstLevel.hueStart
+  return (HSL_THEME.firstLevel.hueStart + HSL_THEME.firstLevel.hueSpan * index / (count - 1)) % 360
+}
+
+function spread(index, count, start, end) {
+  if (count <= 1) return (start + end) / 2
+  return start + (end - start) * index / (count - 1)
+}
+
+function makeColor(hsl) {
+  const normalized = {
+    h: Math.round(hsl.h * 10) / 10,
+    s: Math.round(hsl.s * 10) / 10,
+    l: Math.round(hsl.l * 10) / 10,
+  }
+  return { ...normalized, hex: hslToHex(normalized) }
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value))
 }

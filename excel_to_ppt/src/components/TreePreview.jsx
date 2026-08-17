@@ -38,7 +38,7 @@ export default function TreePreview({ layout }) {
                 y1={y}
                 x2={child.x}
                 y2={y}
-                stroke={colorFor(node)}
+                stroke={colorFor(child)}
                 strokeWidth="2"
                 opacity="0.72"
               />

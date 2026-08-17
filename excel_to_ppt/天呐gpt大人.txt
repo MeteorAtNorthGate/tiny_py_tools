@@ -1,0 +1,192 @@
+## model:gpt5.6sol(high)
+
+› 非常棒！ 再和我讲讲你刚才是怎么从chrome里找到.labelBkg { opacity: 0 }相关的导致文本被变成透明的错误的吧
+
+
+• 过程其实像一次小型的浏览器取证加最小化复现。
+
+  首先，Mermaid Live 把整个编辑状态放在网址的 fragment 中：
+
+  https://mermaid.live/edit#pako:……
+
+  # 后面的内容不会作为 HTTP 请求发送给服务器，所以普通网络缓存里找不到图表源码。不过 Chrome 会把完整地址保存在本地的 Session
+  和 History 数据中。
+
+  我做了下面几步。
+
+  1. 在 Chrome 会话文件中搜索 Mermaid Live 地址
+
+  Chrome 当前配置位于：
+
+  C:\Users\ZhengYanxiao\AppData\Local\Google\Chrome\User Data\Default
+
+  我先搜索 Sessions 目录里的二进制会话文件，找到了多条：
+
+  https://mermaid.live/edit#pako:eNqtXFlv……
+
+  正在使用的 Session 文件会被 Chrome 锁定，所以之后又以只读方式打开 History SQLite 数据库，按照访问时间取得了最新的 Mermaid
+  Live 地址。
+
+  2. 解压 pako 状态
+
+  pako: 后面不是普通 Base64 文本，而是：
+
+  JSON → zlib/deflate 压缩 → Base64 URL 编码
+
+  逆向过程大致是：
+
+  payload = url.split("#pako:", 1)[1]
+  compressed = base64.urlsafe_b64decode(payload)
+  state = json.loads(zlib.decompress(compressed))
+  code = state["code"]
+
+  解出来的对象里包括：
+
+  {
+    "code": "完整 Mermaid 源码",
+    "grid": true,
+    "mermaid": {
+      "theme": "default"
+    },
+    "zoom": 1
+  }
+
+  这一步确认了两个事实：
+
+  - Mermaid Live 确实加载了最新导出的源码。
+  - 修正后的文字颜色 CSS 也已经在源码里。
+
+  所以问题不是浏览器仍在使用旧文件。
+
+  3. 用独立的无头 Chrome 做最小复现
+
+  为了不干扰你正在使用的 Chrome，我启动了一个独立临时配置的无头 Chrome，只渲染两个节点：
+
+  flowchart LR
+    origin ---|Root label| n0
+    n0 ---|Visible child text| n1
+
+  同时保留当时的 CSS：
+
+  .edgeLabel rect,
+  .edgeLabel .labelBkg,
+  .labelBkg {
+    fill: none !important;
+    opacity: 0 !important;
+  }
+
+  截图结果是：
+
+  - 线和圆正常。
+  - 文字完全消失。
+  - 线条连续穿过原本应该放文字的位置。
+
+  这说明 Mermaid 已经识别出了连接关系，但整个标签渲染层被隐藏了。
+
+  4. 对 CSS 做二分排查
+
+  当时原本的假设是：
+
+  .labelBkg
+
+  只代表“标签背景矩形”。
+
+  所以设置：
+
+  .labelBkg {
+    opacity: 0;
+  }
+
+  看起来应该只隐藏背景。
+
+  但 Mermaid Live 11.16.1 的实际渲染行为表明，.labelBkg 并不总是单独的背景图形；在当前 HTML label 渲染路径里，它可能落在包含
+  整个标签内容的容器层上。CSS 的 opacity 会作用于元素及其所有后代，因此文字也一起变成不可见。
+
+  关键区别是：
+
+  /* 危险：如果 labelBkg 是容器，子文字也会消失 */
+  .labelBkg {
+    opacity: 0;
+  }
+
+  和：
+
+  /* 安全：只修改真正的背景矩形 */
+    stroke: none !important;
+  }
+
+  5. 再次用同一个无头 Chrome 验证
+
+  移除 .labelBkg { opacity:0 }，只保留：
+
+  .edgeLabel rect {
+    fill: none !important;
+    stroke: none !important;
+  }
+
+  再次截图后，Root label 和 Visible child text 都正常出现了，圆和线也没有变化。
+
+  所以严格来说，并不是我从某个 Chrome 文件里直接“看见 .labelBkg 是错误的”，而是：
+
+  提取当前标签真实源码
+          ↓
+  确认不是缓存或旧版本
+          ↓
+  构造两个节点的最小示例
+          ↓
+  用相同 Mermaid Live 版本渲染
+          ↓
+  逐项去掉可疑 CSS
+          ↓
+  截图验证 opacity 隐藏了整个标签层
+
+  后面文字被裁切也是类似的问题：最初移动的是 foreignObject 内部的 <p>，文字离开了原文本框视口；改为移动整个 foreignObject
+  后，文字和可视区域一起移动，裁切自然就消失了。
+
+
+› 所以你启动无头浏览器之后完成了截图？还有这种操作？
+
+
+• 是的。我启动了一个独立的 Chrome 无头实例，让它真正打开 Mermaid Live，然后把渲染结果保存成 PNG。
+
+  大致相当于：
+
+  chrome.exe `
+    --headless=new `
+    --disable-gpu `
+    --user-data-dir="临时配置目录" `
+    --window-size=1400,900 `
+    --virtual-time-budget=10000 `
+    --screenshot="mermaid-verify.png" `
+    "https://mermaid.live/edit#pako:..."
+
+  其中：
+
+  - --headless=new：不显示浏览器窗口，但使用完整的 Chrome 渲染引擎。
+  - --user-data-dir：使用独立临时配置，不碰你正在运行的 Chrome。
+  - --virtual-time-budget=10000：给 Mermaid Live 最多约 10 秒执行 JavaScript、完成布局。
+  - --screenshot：把最终页面直接保存成 PNG。
+  - URL 中装着压缩后的最小 Mermaid 测试代码。
+
+  随后我读取截图进行视觉检查。第一次截图只有线和圆，没有文字；移除 .labelBkg { opacity:0 } 后再次截图，文字就出现了。
+
+  这比仅仅检查 Mermaid 源码更可靠，因为它覆盖了完整链路：
+
+  Mermaid 源码
+  → Mermaid Live 当前版本
+  → JavaScript 解析
+  → SVG/foreignObject 生成
+  → CSS 级联
+  → Chrome 实际绘制
+  → PNG 截图
+
+  无头浏览器在网页开发里很常见，通常用于：
+
+  - 端到端测试；
+  - 页面截图和视觉回归；
+  - 检查浏览器实际布局；
+  - 生成 PDF；
+  - 调试 SVG、Canvas 和字体渲染；
+  - 验证只能在真实浏览器里复现的问题。
+
+  它不是模拟浏览器，而是没有可见窗口的真正 Chrome。
