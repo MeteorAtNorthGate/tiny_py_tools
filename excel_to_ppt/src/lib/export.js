@@ -7,34 +7,46 @@ const MARGIN_INCH = 0.45
 
 export function treeToMermaid(root) {
   const lines = [
-    '%%{init: {"theme":"base","themeVariables":{"background":"#FBFBF8","primaryTextColor":"#20231F","fontFamily":"Microsoft YaHei, sans-serif","lineColor":"#8A8F86"},"flowchart":{"curve":"basis"}}}%%',
+    '%%{init: {"theme":"base","themeVariables":{"background":"#FBFBF8","primaryTextColor":"#20231F","edgeLabelBackground":"transparent","fontFamily":"Microsoft YaHei, sans-serif","lineColor":"#8A8F86"},"themeCSS":".edgeLabel,.edgeLabel p,.edgeLabel div{background-color:transparent!important}.edgeLabel rect,.labelBkg{fill:transparent!important;opacity:0!important}","flowchart":{"curve":"basis","htmlLabels":true}}}%%',
     'flowchart LR',
+    '  origin@{ shape: text, label: "" }',
   ]
-  const classes = new Map([['root', [root.id]]])
+  const pointStyles = []
   const linkStyles = []
   let linkIndex = 0
 
+  const declarePoints = (node, branchIndex = null) => {
+    lines.push(`  ${node.id}(( ))`)
+    if (node === root) {
+      pointStyles.push(`  style ${node.id} fill:none,stroke:#20231F,stroke-width:2px,color:transparent;`)
+    } else {
+      const color = PALETTE[branchIndex % PALETTE.length]
+      pointStyles.push(`  style ${node.id} fill:none,stroke:${color},stroke-width:2px,color:transparent;`)
+    }
+    node.children.forEach((child, index) => {
+      const childBranch = node === root ? index : branchIndex
+      declarePoints(child, childBranch)
+    })
+  }
+  declarePoints(root)
+
+  lines.push(`  origin -- "${escapeMermaid(root.label)}" --- ${root.id}`)
+  linkStyles.push('  linkStyle 0 stroke:#20231F,stroke-width:2px;')
+  linkIndex += 1
+
   const walk = (node, branchIndex = null) => {
-    lines.push(`  ${node.id}["${escapeMermaid(node.label)}"]`)
     node.children.forEach((child) => {
       const childBranch = node === root ? node.children.indexOf(child) : branchIndex
-      lines.push(`  ${node.id} --> ${child.id}`)
+      lines.push(`  ${node.id} -- "${escapeMermaid(child.label)}" --- ${child.id}`)
       linkStyles.push(`  linkStyle ${linkIndex} stroke:${PALETTE[childBranch % PALETTE.length]},stroke-width:2px;`)
       linkIndex += 1
-      const className = `branch${childBranch % PALETTE.length}`
-      classes.set(className, [...(classes.get(className) || []), child.id])
       walk(child, childBranch)
     })
   }
   walk(root)
 
-  lines.push('  classDef root fill:#20231F,stroke:#20231F,stroke-width:2px,color:#FFFFFF;')
-  PALETTE.forEach((color, index) => {
-    lines.push(`  classDef branch${index} fill:#FFFFFF,stroke:${color},stroke-width:2px,color:#20231F;`)
-  })
-  classes.forEach((ids, className) => {
-    lines.push(`  class ${ids.join(',')} ${className};`)
-  })
+  lines.push('  style origin fill:transparent,stroke:transparent,color:transparent;')
+  lines.push(...pointStyles)
   lines.push(...linkStyles)
   return lines.join('\n')
 }
