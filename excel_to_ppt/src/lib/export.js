@@ -7,9 +7,9 @@ const MARGIN_INCH = 0.45
 
 export function treeToMermaid(root) {
   const lines = [
-    '%%{init: {"theme":"base","themeVariables":{"background":"#FBFBF8","primaryTextColor":"#20231F","edgeLabelBackground":"transparent","fontFamily":"Microsoft YaHei, sans-serif","lineColor":"#8A8F86"},"themeCSS":".edgeLabel,.edgeLabel p,.edgeLabel div{background-color:transparent!important}.edgeLabel rect,.labelBkg{fill:transparent!important;opacity:0!important}","flowchart":{"curve":"basis","htmlLabels":true}}}%%',
+    '%%{init: {"theme":"base","themeVariables":{"background":"#FBFBF8","primaryTextColor":"#20231F","textColor":"#20231F","edgeLabelBackground":"#FBFBF8","fontFamily":"Microsoft YaHei, sans-serif","lineColor":"#8A8F86"},"themeCSS":".edgeLabel,.edgeLabel p,.edgeLabel div,.edgeLabel span,.edgeLabel foreignObject{background:transparent!important;color:#20231F!important}.edgeLabel p{transform:translateY(calc(-50% - 4px))!important}.edgeLabel text,.edgeLabel tspan,.edgeLabel .label{fill:#20231F!important;color:#20231F!important}.edgeLabel rect{fill:none!important;stroke:none!important}","flowchart":{"curve":"basis","htmlLabels":true}}}%%',
     'flowchart LR',
-    '  origin@{ shape: text, label: "" }',
+    '  origin(( ))',
   ]
   const pointStyles = []
   const linkStyles = []
@@ -18,10 +18,10 @@ export function treeToMermaid(root) {
   const declarePoints = (node, branchIndex = null) => {
     lines.push(`  ${node.id}(( ))`)
     if (node === root) {
-      pointStyles.push(`  style ${node.id} fill:none,stroke:#20231F,stroke-width:2px,color:transparent;`)
+      pointStyles.push(`  style ${node.id} fill:none,stroke:#20231F,stroke-width:2px;`)
     } else {
       const color = PALETTE[branchIndex % PALETTE.length]
-      pointStyles.push(`  style ${node.id} fill:none,stroke:${color},stroke-width:2px,color:transparent;`)
+      pointStyles.push(`  style ${node.id} fill:none,stroke:${color},stroke-width:2px;`)
     }
     node.children.forEach((child, index) => {
       const childBranch = node === root ? index : branchIndex
@@ -30,14 +30,14 @@ export function treeToMermaid(root) {
   }
   declarePoints(root)
 
-  lines.push(`  origin -- "${escapeMermaid(root.label)}" --- ${root.id}`)
+  lines.push(`  origin ---|${escapeMermaid(root.label)}| ${root.id}`)
   linkStyles.push('  linkStyle 0 stroke:#20231F,stroke-width:2px;')
   linkIndex += 1
 
   const walk = (node, branchIndex = null) => {
     node.children.forEach((child) => {
       const childBranch = node === root ? node.children.indexOf(child) : branchIndex
-      lines.push(`  ${node.id} -- "${escapeMermaid(child.label)}" --- ${child.id}`)
+      lines.push(`  ${node.id} ---|${escapeMermaid(child.label)}| ${child.id}`)
       linkStyles.push(`  linkStyle ${linkIndex} stroke:${PALETTE[childBranch % PALETTE.length]},stroke-width:2px;`)
       linkIndex += 1
       walk(child, childBranch)
@@ -45,7 +45,7 @@ export function treeToMermaid(root) {
   }
   walk(root)
 
-  lines.push('  style origin fill:transparent,stroke:transparent,color:transparent;')
+  lines.push('  style origin fill:none,stroke:none;')
   lines.push(...pointStyles)
   lines.push(...linkStyles)
   return lines.join('\n')
@@ -144,7 +144,11 @@ export async function exportPptx(layout, baseName) {
 }
 
 function escapeMermaid(value) {
-  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/[\r\n]+/g, ' ')
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/\|/g, '&#124;')
+    .replace(/[\r\n]+/g, ' ')
 }
 
 function downloadBlob(blob, filename) {
