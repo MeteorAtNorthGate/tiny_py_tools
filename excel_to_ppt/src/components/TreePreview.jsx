@@ -1,4 +1,4 @@
-import { colorFor } from '../lib/layout'
+import { colorFor, RELATION_GAP } from '../lib/layout'
 
 export default function TreePreview({ layout }) {
   return (
@@ -11,17 +11,33 @@ export default function TreePreview({ layout }) {
         aria-label="树状图预览"
       >
         <g fill="none" strokeLinecap="round" strokeLinejoin="round">
-          {layout.nodes.filter((node) => node.children.length > 0).map((node) => {
+          {layout.nodes.filter((node) => node.children.length > 1).map((node) => {
             const children = node.children.map((child) => layout.nodes.find((item) => item.id === child.id))
             const top = Math.min(...children.map((child) => child.y))
             const bottom = Math.max(...children.map((child) => child.y + child.height))
-            const x = Math.min(...children.map((child) => child.x)) - 62
-            const width = 26
+            const x = node.x + node.width + RELATION_GAP.parentToBrace
+            const width = RELATION_GAP.braceWidth
             const height = bottom - top
             return (
               <path
                 key={`brace-${node.id}`}
                 d={bracePath(x, top, width, height)}
+                stroke={colorFor(node)}
+                strokeWidth="2"
+                opacity="0.72"
+              />
+            )
+          })}
+          {layout.nodes.filter((node) => node.children.length === 1).map((node) => {
+            const child = layout.nodes.find((item) => item.id === node.children[0].id)
+            const y = node.y + node.height / 2
+            return (
+              <line
+                key={`line-${node.id}`}
+                x1={node.x + node.width}
+                y1={y}
+                x2={child.x}
+                y2={y}
                 stroke={colorFor(node)}
                 strokeWidth="2"
                 opacity="0.72"

@@ -1,5 +1,5 @@
 import pptxgen from 'pptxgenjs'
-import { colorFor } from './layout.js'
+import { colorFor, RELATION_GAP } from './layout.js'
 
 const PX_PER_INCH = 96
 const MAX_SLIDE_INCH = 56
@@ -50,18 +50,37 @@ export async function exportPptx(layout, baseName) {
   // avoid composed line connectors: upward lines create negative OOXML extents
   // that some PowerPoint versions repair or discard.
   const nodeById = Object.fromEntries(layout.nodes.map((node) => [node.id, node]))
-  layout.nodes.filter((node) => node.children.length > 0).forEach((node) => {
+  layout.nodes.filter((node) => node.children.length > 1).forEach((node) => {
     const childNodes = node.children.map((child) => nodeById[child.id])
     const top = Math.min(...childNodes.map((child) => child.y))
     const bottom = Math.max(...childNodes.map((child) => child.y + child.height))
-    const braceX = Math.min(...childNodes.map((child) => child.x)) - 62
+    const braceX = node.x + node.width + RELATION_GAP.parentToBrace
     slide.addShape(pptx.ShapeType.leftBrace, {
       x: MARGIN_INCH + braceX * unit,
       y: MARGIN_INCH + top * unit,
-      w: Math.max(0.08, 26 * unit),
+      w: Math.max(0.08, RELATION_GAP.braceWidth * unit),
       h: Math.max(0.12, (bottom - top) * unit),
       fill: { color: 'FFFFFF', transparency: 100 },
       line: { color: colorFor(node).slice(1), width: Math.max(0.5, 1.1 * shrink) },
+    })
+  })
+
+  layout.nodes.filter((node) => node.children.length === 1).forEach((node) => {
+    const child = nodeById[node.children[0].id]
+    const x1 = MARGIN_INCH + (node.x + node.width) * unit
+    const x2 = MARGIN_INCH + child.x * unit
+    const y = MARGIN_INCH + (node.y + node.height / 2) * unit
+    slide.addShape(pptx.ShapeType.line, {
+      x: x1,
+      y,
+      w: x2 - x1,
+      h: 0,
+      line: {
+        color: colorFor(node).slice(1),
+        width: Math.max(0.5, 1.1 * shrink),
+        beginArrowType: 'none',
+        endArrowType: 'none',
+      },
     })
   })
 
