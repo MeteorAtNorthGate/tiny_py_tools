@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.log
+
+# localfiles
+示意图1.png
+表格1.xlsx
+表格1.pptx
