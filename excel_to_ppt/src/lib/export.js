@@ -7,7 +7,7 @@ const MARGIN_INCH = 0.45
 
 export function treeToMermaid(root) {
   const lines = [
-    '%%{init: {"theme":"base","themeVariables":{"background":"#FBFBF8","primaryTextColor":"#20231F","textColor":"#20231F","edgeLabelBackground":"#FBFBF8","fontFamily":"Microsoft YaHei, sans-serif","lineColor":"#8A8F86"},"themeCSS":".edgeLabel,.edgeLabel p,.edgeLabel div,.edgeLabel span,.edgeLabel foreignObject{background:transparent!important;color:#20231F!important}.edgeLabel p{transform:translateY(calc(-50% - 4px))!important}.edgeLabel text,.edgeLabel tspan,.edgeLabel .label{fill:#20231F!important;color:#20231F!important}.edgeLabel rect{fill:none!important;stroke:none!important}","flowchart":{"curve":"basis","htmlLabels":true}}}%%',
+    '%%{init: {"theme":"base","themeVariables":{"background":"#FBFBF8","primaryTextColor":"#20231F","textColor":"#20231F","edgeLabelBackground":"#FBFBF8","fontFamily":"Microsoft YaHei, sans-serif","lineColor":"#8A8F86"},"themeCSS":".edgeLabel,.edgeLabel p,.edgeLabel div,.edgeLabel span,.edgeLabel foreignObject{background:transparent!important;color:#20231F!important}.edgeLabel foreignObject{transform-box:fill-box!important;transform:translateY(calc(-50% - 4px))!important;overflow:visible!important}.edgeLabel text,.edgeLabel tspan,.edgeLabel .label{fill:#20231F!important;color:#20231F!important}.edgeLabel rect{fill:none!important;stroke:none!important}","flowchart":{"curve":"basis","htmlLabels":true}}}%%',
     'flowchart LR',
     '  origin(( ))',
   ]
