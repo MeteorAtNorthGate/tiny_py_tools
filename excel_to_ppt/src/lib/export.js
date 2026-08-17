@@ -1,20 +1,41 @@
 import pptxgen from 'pptxgenjs'
-import { colorFor, RELATION_GAP } from './layout.js'
+import { colorFor, PALETTE, RELATION_GAP } from './layout.js'
 
 const PX_PER_INCH = 96
 const MAX_SLIDE_INCH = 56
 const MARGIN_INCH = 0.45
 
 export function treeToMermaid(root) {
-  const lines = ['flowchart LR']
-  const walk = (node) => {
+  const lines = [
+    '%%{init: {"theme":"base","themeVariables":{"background":"#FBFBF8","primaryTextColor":"#20231F","fontFamily":"Microsoft YaHei, sans-serif","lineColor":"#8A8F86"},"flowchart":{"curve":"basis"}}}%%',
+    'flowchart LR',
+  ]
+  const classes = new Map([['root', [root.id]]])
+  const linkStyles = []
+  let linkIndex = 0
+
+  const walk = (node, branchIndex = null) => {
     lines.push(`  ${node.id}["${escapeMermaid(node.label)}"]`)
     node.children.forEach((child) => {
+      const childBranch = node === root ? node.children.indexOf(child) : branchIndex
       lines.push(`  ${node.id} --> ${child.id}`)
-      walk(child)
+      linkStyles.push(`  linkStyle ${linkIndex} stroke:${PALETTE[childBranch % PALETTE.length]},stroke-width:2px;`)
+      linkIndex += 1
+      const className = `branch${childBranch % PALETTE.length}`
+      classes.set(className, [...(classes.get(className) || []), child.id])
+      walk(child, childBranch)
     })
   }
   walk(root)
+
+  lines.push('  classDef root fill:#20231F,stroke:#20231F,stroke-width:2px,color:#FFFFFF;')
+  PALETTE.forEach((color, index) => {
+    lines.push(`  classDef branch${index} fill:#FFFFFF,stroke:${color},stroke-width:2px,color:#20231F;`)
+  })
+  classes.forEach((ids, className) => {
+    lines.push(`  class ${ids.join(',')} ${className};`)
+  })
+  lines.push(...linkStyles)
   return lines.join('\n')
 }
 
