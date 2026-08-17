@@ -2,19 +2,31 @@ import { flattenTree } from './tree.js'
 
 export const HSL_THEME = Object.freeze({
   root: { h: 105, s: 6, l: 13 },
-  firstLevel: {
-    hueStart: 205,
-    hueSpan: 300,
-    saturation: 68,
-    lightness: 43,
-  },
+  firstLevel: [
+    { h: 204, s: 68, l: 41 }, // 蓝
+    { h: 346, s: 84, l: 61 }, // 玫红
+    { h: 180, s: 93, l: 34 }, // 青
+    { h: 30, s: 92, l: 55 },  // 橙
+    { h: 257, s: 61, l: 59 }, // 紫
+    { h: 134, s: 58, l: 39 }, // 绿
+    { h: 15, s: 38, l: 44 },  // 陶红
+    { h: 222, s: 70, l: 52 }, // 靛蓝
+    { h: 315, s: 65, l: 52 }, // 洋红
+    { h: 164, s: 62, l: 39 }, // 翡翠
+    { h: 48, s: 85, l: 45 },  // 金黄
+    { h: 282, s: 55, l: 55 }, // 罗兰紫
+    { h: 95, s: 52, l: 42 },  // 草绿
+    { h: 5, s: 72, l: 56 },   // 珊瑚红
+  ],
   secondLevel: {
-    saturationHigh: 74,
-    saturationLow: 62,
+    saturationOffsetHigh: 10,
+    saturationOffsetLow: -10,
+    minSaturation: 28,
+    maxSaturation: 95,
   },
   deeperLevels: {
-    lightnessStep: 6,
-    siblingVariation: 6,
+    lightnessStep: 10,
+    siblingVariation: 10,
     minLightness: 34,
     maxLightness: 64,
   },
@@ -76,11 +88,7 @@ export function createTreeColorMap(root) {
   colors.set(root.id, makeColor(HSL_THEME.root))
 
   root.children.forEach((firstLevelNode, index) => {
-    const firstLevel = {
-      h: distributeHue(index, root.children.length),
-      s: HSL_THEME.firstLevel.saturation,
-      l: HSL_THEME.firstLevel.lightness,
-    }
+    const firstLevel = firstLevelColor(index)
     assignColor(firstLevelNode, firstLevel)
   })
 
@@ -91,13 +99,18 @@ export function createTreeColorMap(root) {
     node.children.forEach((child, index) => {
       let childHsl
       if (child.depth === 2) {
+        const saturationOffset = spread(
+          index,
+          node.children.length,
+          HSL_THEME.secondLevel.saturationOffsetHigh,
+          HSL_THEME.secondLevel.saturationOffsetLow,
+        )
         childHsl = {
           ...hsl,
-          s: spread(
-            index,
-            node.children.length,
-            HSL_THEME.secondLevel.saturationHigh,
-            HSL_THEME.secondLevel.saturationLow,
+          s: clamp(
+            hsl.s + saturationOffset,
+            HSL_THEME.secondLevel.minSaturation,
+            HSL_THEME.secondLevel.maxSaturation,
           ),
         }
       } else {
@@ -144,9 +157,17 @@ function visualLength(text) {
   return [...text].reduce((length, char) => length + (/[^\u0000-\u00ff]/.test(char) ? 1 : 0.55), 0)
 }
 
-function distributeHue(index, count) {
-  if (count <= 1) return HSL_THEME.firstLevel.hueStart
-  return (HSL_THEME.firstLevel.hueStart + HSL_THEME.firstLevel.hueSpan * index / (count - 1)) % 360
+function firstLevelColor(index) {
+  const palette = HSL_THEME.firstLevel
+  const base = palette[index % palette.length]
+  const cycle = Math.floor(index / palette.length)
+  if (cycle === 0) return { ...base }
+
+  return {
+    h: (base.h + cycle * 17) % 360,
+    s: clamp(base.s - cycle * 4, 38, 92),
+    l: clamp(base.l + (cycle % 2 ? 7 : -4), 34, 64),
+  }
 }
 
 function spread(index, count, start, end) {
