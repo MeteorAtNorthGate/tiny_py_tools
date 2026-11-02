@@ -225,6 +225,7 @@ class ElementItem(QGraphicsObject):
 
 class CanvasView(QGraphicsView):
     selected = Signal(str)
+    interaction_started = Signal()
     page_activated = Signal(str)
     annotate_requested = Signal(str)
     zoom_changed = Signal(int)
@@ -381,6 +382,7 @@ class CanvasView(QGraphicsView):
             super().wheelEvent(event)
 
     def mousePressEvent(self, event):
+        self.interaction_started.emit()
         if event.button() == Qt.MouseButton.MiddleButton or (self.space_down and event.button() == Qt.MouseButton.LeftButton):
             self.panning = True
             self.pan_start = event.position()

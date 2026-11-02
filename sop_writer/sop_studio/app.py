@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QFileDialog, QFormLayout, QGridLayout, QHBoxLayout,
     QInputDialog, QKeySequenceEdit, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMainWindow, QMessageBox, QPushButton, QScrollArea, QSpinBox, QSplitter,
+    QMainWindow, QMenu, QMessageBox, QPushButton, QScrollArea, QSpinBox, QSplitter,
     QToolBar, QVBoxLayout, QWidget,
 )
 
@@ -22,6 +22,7 @@ from .capture import GlobalHotkey, SystemCapture
 from .controller import DocumentController
 from .document import Document, Element, Page, load_document, new_id, save_document
 from .inspector_controls import ChoiceInput, ColorInput, FontPicker, IntegerInput, NumberInput
+from .page_list import PageList
 from .rendering import export_pdf, image_bytes, thumbnail
 from .style import apply_style
 
@@ -70,6 +71,7 @@ class MainWindow(QMainWindow):
         self.controller = DocumentController(self)
         self.filename = None
         self.active_page_id = self.controller.document.pages[0].id
+        self.selected_page_id = None
         self.next_selected = None
         self.refresh_pending = False
         self.updating_inspector = False
@@ -82,6 +84,8 @@ class MainWindow(QMainWindow):
         self.closing = False
         self.auto_receive_snips = self.settings.value("receive_system_snips", True, type=bool)
         self.element_clipboard = None
+        self.page_clipboard = None
+        self.page_clipboard_token = None
         self.resize(1480, 940)
         self.setMinimumSize(1120, 720)
         self.setWindowTitle("SOP Studio")
@@ -197,6 +201,7 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(QLabel("拖入图片 · 双击编辑 · Ctrl + 滚轮缩放"))
         root.addWidget(toolbar)
         splitter = QSplitter()
+        self.workspace_splitter = splitter
         splitter.setHandleWidth(1)
         left = QWidget()
         left.setObjectName("sidebar")
@@ -207,18 +212,22 @@ class MainWindow(QMainWindow):
         label = QLabel("文档页面")
         label.setObjectName("section")
         sidebar.addWidget(label)
-        self.page_list = QListWidget()
+        self.page_list = PageList()
         self.page_list.setIconSize(QSize(120, 170))
-        self.page_list.setViewMode(QListWidget.ViewMode.IconMode)
         self.page_list.setResizeMode(QListWidget.ResizeMode.Adjust)
-        self.page_list.setMovement(QListWidget.Movement.Static)
         self.page_list.setWordWrap(True)
         self.page_list.setSpacing(2)
-        self.page_list.currentRowChanged.connect(self.page_selected)
+        self.page_list.itemSelectionChanged.connect(self.page_selected)
+        self.page_list.itemClicked.connect(lambda item: self.page_selected())
+        self.page_list.order_changed.connect(self.reorder_pages)
+        self.page_list.delete_requested.connect(self.delete_page)
+        self.page_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.page_list.customContextMenuRequested.connect(self.page_context_menu)
         sidebar.addWidget(self.page_list, 1)
         sidebar.addWidget(self.button("＋ 添加页面", self.add_page))
         splitter.addWidget(left)
         self.canvas = CanvasView(self.controller)
+        self.canvas.interaction_started.connect(self.clear_page_selection)
         self.canvas.selected.connect(self.inspect_element)
         self.canvas.page_activated.connect(self.activate_page)
         self.canvas.annotate_requested.connect(self.annotate_element)
@@ -228,9 +237,10 @@ class MainWindow(QMainWindow):
         self.canvas.nudge_requested.connect(self.nudge)
         splitter.addWidget(self.canvas)
         inspector_scroll = QScrollArea()
+        self.inspector_scroll = inspector_scroll
         inspector_scroll.setWidgetResizable(True)
         inspector_scroll.setMinimumWidth(270)
-        inspector_scroll.setMaximumWidth(320)
+        inspector_scroll.setMaximumWidth(640)
         inspector = QWidget()
         inspector.setObjectName("inspector")
         self.inspector_layout = QVBoxLayout(inspector)
@@ -240,14 +250,6 @@ class MainWindow(QMainWindow):
         self.page_info = QLabel()
         self.inspector_layout.addWidget(self.page_info)
         self.inspector_layout.addWidget(self.button("修改页面尺寸", self.resize_page))
-        page_tools = QHBoxLayout()
-        page_tools.addWidget(self.button("复制页", self.duplicate_page))
-        page_tools.addWidget(self.button("删除页", self.delete_page))
-        self.inspector_layout.addLayout(page_tools)
-        page_order = QHBoxLayout()
-        page_order.addWidget(self.button("上移页", lambda: self.move_page(-1)))
-        page_order.addWidget(self.button("下移页", lambda: self.move_page(1)))
-        self.inspector_layout.addLayout(page_order)
         self.section("所选元素")
         self.selection_hint = QLabel("选择图片或文本框来调整属性。")
         self.selection_hint.setWordWrap(True)
@@ -290,6 +292,7 @@ class MainWindow(QMainWindow):
         text_form.setContentsMargins(0, 8, 0, 0)
         text_form.setVerticalSpacing(8)
         text_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        text_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.font_family = FontPicker()
         self.font_family.currentFontChanged.connect(self.apply_font)
         text_form.addRow("字体", self.font_family)
@@ -347,13 +350,13 @@ class MainWindow(QMainWindow):
         self.inspector_layout.addWidget(self.element_panel)
         self.inspector_layout.addStretch()
         self.section("快速上手")
-        help_text = QLabel("① Win+Shift+S 使用系统截图\n② 截图完成后自动打开标注窗\n③ Ctrl+Enter 插入文档\n\nCtrl+1 也可打开系统截图\nCtrl+Shift+V 标注剪贴板图片\n拖动元素移动位置\n拖右下角缩放，Shift 自由比例\nEnter / 双击文字编辑\nCtrl+Enter 完成文字编辑\nCtrl+J 复制元素，Delete 删除\n双击图片继续标注\n空格拖动或中键平移画布")
+        help_text = QLabel("① Win+Shift+S 使用系统截图\n② 截图完成后自动打开标注窗\n③ Ctrl+Enter 插入文档\n\nCtrl+1 也可打开系统截图\nCtrl+Shift+V 标注剪贴板图片\n拖动元素移动位置\n拖右下角缩放，Shift 自由比例\nEnter / 双击文字编辑\nCtrl+Enter 完成文字编辑\nCtrl+J 复制元素，Delete 删除\n双击图片继续标注\n空格拖动或中键平移画布\n\nCtrl+M 新增页面\n单击左侧页面显示蓝色选框\nCtrl+C / V 复制粘贴所选页面\nDelete 删除页面，Esc 取消选择\n上下拖动页面缩略图调整页序")
         help_text.setObjectName("muted")
         help_text.setWordWrap(True)
         self.inspector_layout.addWidget(help_text)
         inspector_scroll.setWidget(inspector)
         splitter.addWidget(inspector_scroll)
-        splitter.setSizes([184, 1000, 296])
+        splitter.setSizes([184, 896, 400])
         splitter.setStretchFactor(1, 1)
         splitter.setChildrenCollapsible(False)
         root.addWidget(splitter, 1)
@@ -398,7 +401,7 @@ class MainWindow(QMainWindow):
         self.action(insert, "标注剪贴板图片", self.annotate_clipboard, "Ctrl+Shift+V")
         self.action(insert, "图片…", self.import_images, "Ctrl+Shift+I")
         self.action(insert, "文本框", self.add_text, "Ctrl+Alt+T")
-        self.action(insert, "新页面", self.add_page, "Ctrl+Shift+Return")
+        self.action(insert, "新页面", self.add_page, "Ctrl+M")
         settings = self.menuBar().addMenu("设置")
         self.action(settings, "截图快捷键…", self.change_hotkey)
         receive = QAction("自动接收 Win+Shift+S 截图", self)
@@ -419,10 +422,14 @@ class MainWindow(QMainWindow):
         document = self.controller.document
         if not any(page.id == self.active_page_id for page in document.pages):
             self.active_page_id = document.pages[0].id
+        if not any(page.id == self.selected_page_id for page in document.pages):
+            self.selected_page_id = None
         self.canvas.rebuild(self.next_selected)
         self.next_selected = None
+        scroll_position = self.page_list.verticalScrollBar().value()
         self.page_list.blockSignals(True)
         self.page_list.clear()
+        selected_item = None
         for index, page in enumerate(document.pages):
             image = thumbnail(page, document.assets, 120)
             pixmap = QPixmap.fromImage(image)
@@ -431,11 +438,19 @@ class MainWindow(QMainWindow):
             icon.addPixmap(pixmap, QIcon.Mode.Active)
             item = QListWidgetItem(icon, f"{index + 1:02d}   ·   {page.width} × {page.height}")
             item.setData(Qt.ItemDataRole.UserRole, page.id)
-            item.setSizeHint(QSize(146, 207))
+            # Drops insert between pages instead of dropping into a page card.
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsDropEnabled)
+            item.setSizeHint(QSize(0, 207))
             self.page_list.addItem(item)
-            if page.id == self.active_page_id:
+            if page.id == self.selected_page_id:
                 self.page_list.setCurrentItem(item)
+                selected_item = item
+        if selected_item is None:
+            self.page_list.clear_page_selection()
         self.page_list.blockSignals(False)
+        self.page_list.verticalScrollBar().setValue(scroll_position)
+        if selected_item is not None:
+            self.page_list.scrollToItem(selected_item)
         self.title_input.setText(document.title)
         self.page_count_label.setText(f"{len(document.pages)} 页    ·    {sum(len(p.elements) for p in document.pages)} 个元素    ")
         self.update_page_info()
@@ -447,20 +462,50 @@ class MainWindow(QMainWindow):
 
     def activate_page(self, page_id):
         self.active_page_id = page_id
-        self.page_list.blockSignals(True)
-        for index in range(self.page_list.count()):
-            if self.page_list.item(index).data(Qt.ItemDataRole.UserRole) == page_id:
-                self.page_list.setCurrentRow(index)
-                break
-        self.page_list.blockSignals(False)
         self.update_page_info()
 
-    def page_selected(self, index):
-        if index < 0:
+    def clear_page_selection(self):
+        self.selected_page_id = None
+        self.page_list.blockSignals(True)
+        self.page_list.clear_page_selection()
+        self.page_list.blockSignals(False)
+
+    def page_selected(self):
+        page_id = self.page_list.selected_page_id()
+        self.selected_page_id = page_id
+        if page_id is None:
             return
-        self.active_page_id = self.page_list.item(index).data(Qt.ItemDataRole.UserRole)
-        self.canvas.go_to_page(self.active_page_id)
-        self.update_page_info()
+        self.canvas.finish_edit()
+        self.canvas.scene().clearSelection()
+        self.activate_page(page_id)
+        self.canvas.go_to_page(page_id)
+
+    def selected_page(self):
+        return next((page for page in self.controller.document.pages if page.id == self.selected_page_id), None)
+
+    def page_context_menu(self, position):
+        item = self.page_list.itemAt(position)
+        if item is not None:
+            self.page_list.setCurrentItem(item)
+            self.page_selected()
+        else:
+            self.clear_page_selection()
+        menu = QMenu(self.page_list)
+        create = menu.addAction("新增页面    Ctrl+M")
+        create.triggered.connect(self.add_page)
+        create.setEnabled(len(self.controller.document.pages) < 200)
+        menu.addSeparator()
+        copy = menu.addAction("复制页面    Ctrl+C")
+        copy.triggered.connect(self.copy_page)
+        copy.setEnabled(self.selected_page() is not None)
+        paste = menu.addAction("粘贴页面    Ctrl+V")
+        paste.triggered.connect(self.paste_page)
+        paste.setEnabled(self.has_page_clipboard() and len(self.controller.document.pages) < 200)
+        delete = menu.addAction("删除页面    Delete")
+        delete.triggered.connect(self.delete_page)
+        delete.setEnabled(self.selected_page() is not None)
+        menu.exec(self.page_list.viewport().mapToGlobal(position))
+        menu.deleteLater()
 
     def update_page_info(self):
         page = self.current_page()
@@ -474,6 +519,7 @@ class MainWindow(QMainWindow):
         if not found:
             return
         page, element = found
+        self.clear_page_selection()
         self.activate_page(page.id)
         self.updating_inspector = True
         for key, spin in self.geometry_inputs.items():
@@ -604,6 +650,9 @@ class MainWindow(QMainWindow):
         self.controller.perform("复制元素", lambda d: next(p for p in d.pages if p.id == page_id).elements.append(element))
 
     def copy_selected(self):
+        if self.selected_page() is not None:
+            self.copy_page()
+            return
         editing = self.canvas.editing_item()
         if editing:
             QApplication.clipboard().setText(editing.text_item.textCursor().selectedText().replace("\u2029", "\n"))
@@ -630,6 +679,9 @@ class MainWindow(QMainWindow):
         if editing:
             cursor = editing.text_item.textCursor()
             cursor.insertText(clipboard.text())
+            return
+        if self.has_page_clipboard():
+            self.paste_page()
             return
         self.canvas.finish_edit()
         if mime.hasFormat("application/x-sop-studio-element") and self.element_clipboard:
@@ -744,6 +796,8 @@ class MainWindow(QMainWindow):
             self.error("无法添加", "最多支持 200 页。")
             return
         new_page = Page(width=page.width, height=page.height)
+        if self.selected_page_id is not None or self.page_list.hasFocus():
+            self.selected_page_id = new_page.id
         self.active_page_id = new_page.id
 
         def insert(document):
@@ -753,6 +807,56 @@ class MainWindow(QMainWindow):
         self.next_selected = ""
         self.controller.perform("添加页面", insert)
         QTimer.singleShot(0, lambda: self.canvas.go_to_page(new_page.id))
+
+    def copy_page(self):
+        self.canvas.finish_edit()
+        page = self.selected_page()
+        if page is None:
+            return
+        assets = {element.asset: self.controller.document.assets[element.asset]
+                  for element in page.elements if element.kind == "image"}
+        self.page_clipboard = deepcopy(page), assets
+        self.page_clipboard_token = new_id()
+        from PySide6.QtCore import QMimeData
+        mime = QMimeData()
+        mime.setData("application/x-sop-studio-page", self.page_clipboard_token.encode())
+        QApplication.clipboard().setMimeData(mime)
+        index = self.controller.document.pages.index(page) + 1
+        self.statusBar().showMessage(f"已复制第 {index} 页，Ctrl+V 粘贴页面。", 3000)
+
+    def has_page_clipboard(self):
+        mime = QApplication.clipboard().mimeData()
+        return bool(self.page_clipboard is not None and mime is not None
+                    and mime.hasFormat("application/x-sop-studio-page")
+                    and bytes(mime.data("application/x-sop-studio-page")) == self.page_clipboard_token.encode())
+
+    def paste_page(self):
+        if not self.has_page_clipboard():
+            return
+        self.canvas.finish_edit()
+        if len(self.controller.document.pages) >= 200:
+            self.statusBar().showMessage("无法粘贴页面：最多支持 200 页。", 5000)
+            return
+        current = self.selected_page() or self.current_page()
+        page, assets = self.page_clipboard
+        self.insert_page_copy(current.id, page, assets, "粘贴页面", explicit=True)
+
+    def insert_page_copy(self, after_id, source, assets, label, explicit=False):
+        page = deepcopy(source)
+        page.id = new_id()
+        for element in page.elements:
+            element.id = new_id()
+        self.active_page_id = page.id
+        self.selected_page_id = page.id if explicit else None
+
+        def insert(document):
+            index = next(i for i, p in enumerate(document.pages) if p.id == after_id)
+            document.assets.update(assets)
+            document.pages.insert(index + 1, page)
+
+        self.next_selected = ""
+        self.controller.perform(label, insert)
+        QTimer.singleShot(0, lambda: self.canvas.go_to_page(page.id))
 
     def resize_page(self):
         self.canvas.finish_edit()
@@ -773,26 +877,20 @@ class MainWindow(QMainWindow):
         self.canvas.finish_edit()
         if len(self.controller.document.pages) >= 200:
             return
-        current = self.current_page()
-        page = deepcopy(current)
-        page.id = new_id()
-        for element in page.elements:
-            element.id = new_id()
-        self.active_page_id = page.id
-
-        def insert(document):
-            index = next(i for i, p in enumerate(document.pages) if p.id == current.id)
-            document.pages.insert(index + 1, page)
-
-        self.next_selected = ""
-        self.controller.perform("复制页面", insert)
-        QTimer.singleShot(0, lambda: self.canvas.go_to_page(page.id))
+        current = self.selected_page() or self.current_page()
+        self.insert_page_copy(current.id, current, {}, "复制页面", explicit=self.selected_page_id is not None)
 
     def delete_page(self):
         self.canvas.finish_edit()
-        page = self.current_page()
-        if page.elements and QMessageBox.question(self, "删除页面", "删除当前页面及其中的所有元素？此操作可以撤销。") != QMessageBox.StandardButton.Yes:
-            return
+        page = self.selected_page() or self.current_page()
+        pages = self.controller.document.pages
+        index = pages.index(page)
+        explicit = self.selected_page_id is not None
+        if len(pages) > 1:
+            following = pages[index + 1] if index + 1 < len(pages) else pages[index - 1]
+            if self.active_page_id == page.id:
+                self.active_page_id = following.id
+            self.selected_page_id = following.id if explicit else None
 
         def remove(document):
             if len(document.pages) == 1:
@@ -802,6 +900,21 @@ class MainWindow(QMainWindow):
 
         self.next_selected = ""
         self.controller.perform("删除页面", remove)
+        QTimer.singleShot(0, lambda: self.canvas.go_to_page(self.active_page_id))
+
+    def reorder_pages(self, page_ids):
+        pages = self.controller.document.pages
+        if len(page_ids) != len(pages) or set(page_ids) != {page.id for page in pages}:
+            self.schedule_refresh()
+            return
+        self.canvas.finish_edit()
+
+        def reorder(document):
+            by_id = {page.id: page for page in document.pages}
+            document.pages = [by_id[page_id] for page_id in page_ids]
+
+        self.controller.perform("调整页序", reorder)
+        QTimer.singleShot(0, lambda: self.canvas.go_to_page(self.active_page_id))
 
     def move_page(self, direction):
         self.canvas.finish_edit()
@@ -988,6 +1101,8 @@ class MainWindow(QMainWindow):
         document = Document(pages=[Page(width=width, height=height)])
         self.filename = None
         self.active_page_id = document.pages[0].id
+        self.clear_page_selection()
+        self.next_selected = ""
         self.controller.replace(document)
         self.clear_recovery()
 
@@ -1006,6 +1121,7 @@ class MainWindow(QMainWindow):
                     raise ValueError("文档包含无法读取的图片。")
             self.filename = str(path)
             self.active_page_id = document.pages[0].id
+            self.clear_page_selection()
             self.next_selected = ""
             self.controller.replace(document)
             if not self.test_mode:
@@ -1097,6 +1213,7 @@ class MainWindow(QMainWindow):
         if QMessageBox.question(self, "恢复文档", "发现上次未正常退出时的恢复副本，是否恢复？") == QMessageBox.StandardButton.Yes:
             try:
                 document = load_document(path)
+                self.clear_page_selection()
                 self.controller.replace(Document())
                 self.controller.perform("恢复未保存文档", lambda d: (setattr(d, "title", document.title), setattr(d, "pages", document.pages), setattr(d, "assets", document.assets)))
                 self.filename = None
@@ -1107,7 +1224,7 @@ class MainWindow(QMainWindow):
             self.clear_recovery()
 
     def show_help(self):
-        QMessageBox.information(self, "SOP Studio · 使用说明", "1. 直接按 Win+Shift+S，用 Windows 自带工具截图。\n2. 截图写入剪贴板后，自动打开本工具的悬浮标注窗。\n3. 选择箭头、文本框、马赛克或涂鸦，Ctrl+Enter 插入文档。\n4. 拖动元素，拖右下角缩放；双击文字或选中后按 Enter 编辑。\n5. 右栏直接输入精确数值，分别调整文字与文本框的颜色、描边和不透明度。\n6. 保存为 .sopx 可继续编辑，Ctrl+E 导出多页 PDF。\n\nCtrl+1 或截图按钮也会打开 Windows 截图。\nCtrl+Shift+V 可手动标注剪贴板图片。\n设置菜单可关闭自动接收、修改额外截图快捷键。\n\nCtrl+V 粘贴图片或文字；Ctrl+J 复制元素，Delete 删除。\n马赛克和标注插入后合并为图片；文档编辑仍可撤销。")
+        QMessageBox.information(self, "SOP Studio · 使用说明", "1. 直接按 Win+Shift+S，用 Windows 自带工具截图。\n2. 截图写入剪贴板后，自动打开本工具的悬浮标注窗。\n3. 选择箭头、文本框、马赛克或涂鸦，Ctrl+Enter 插入文档。\n4. 拖动元素，拖右下角缩放；双击文字或选中后按 Enter 编辑。\n5. 右栏直接输入精确数值，分别调整文字与文本框的颜色、描边和不透明度。\n6. Ctrl+M 新增页面；单击左侧缩略图选择页面，Ctrl+C / V 复制粘贴，Delete 删除，上下拖动排序。\n7. 点击画布或在页面列表按 Esc 取消蓝色页面选框，当前编辑页仍会保留。\n8. 保存为 .sopx 可继续编辑，Ctrl+E 导出多页 PDF。\n\nCtrl+1 或截图按钮也会打开 Windows 截图。\nCtrl+Shift+V 可手动标注剪贴板图片。\n设置菜单可关闭自动接收、修改额外截图快捷键。\n\n在画布中 Ctrl+V 粘贴图片或文字；Ctrl+J 复制元素，Delete 删除。\n马赛克和标注插入后合并为图片；文档编辑仍可撤销。")
 
     def error(self, title, error):
         logging.error("%s: %s", title, error)
