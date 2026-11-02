@@ -27,6 +27,30 @@ def annotation_text_box(operation, document):
     return QRectF(rect.x(), rect.y(), width, max(rect.height(), size.height()))
 
 
+def fitted_text_box(operation):
+    """The box that tightly holds the text at its current font size.
+
+    Auto-width text ignores its stored width so the frame can shrink again
+    after the font gets smaller; wrapped text keeps the width the user drew.
+    """
+    rect = QRectF(QPointF(*operation["points"][0]), QPointF(*operation["points"][-1])).normalized()
+    document = make_annotation_text(operation)
+    if operation.get("auto_width"):
+        # An unconstrained layout reports the width of the longest line.
+        document.setTextWidth(-1)
+        width = max(32.0, document.size().width())
+    else:
+        width = max(32.0, rect.width())
+    return QRectF(rect.x(), rect.y(), width, max(32.0, document.size().height()))
+
+
+def fit_text_operation_box(operation):
+    """Persist a text box that matches the text after a font-size change."""
+    box = fitted_text_box(operation)
+    operation["points"] = [[box.left(), box.top()], [box.right(), box.bottom()]]
+    return box
+
+
 class InlineTextFrame(QGraphicsObject):
     def __init__(self, canvas, operation):
         super().__init__()

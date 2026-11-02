@@ -87,9 +87,9 @@ class AnnotationWindowTests(unittest.TestCase):
         QTest.keyClick(window.canvas.viewport(), Qt.Key.Key_T)
         flush()
         self.assertEqual(window.canvas.tool, "text")
-        self.assertTrue(window.toolbar.font_button.isVisible())
+        self.assertTrue(window.toolbar.font_slider.isVisible())
         for button in [window.toolbar.close_button, window.toolbar.insert_button,
-                       window.toolbar.font_button, window.toolbar.fit_button, window.toolbar.stroke_slider]:
+                       window.toolbar.font_slider, window.toolbar.fit_button, window.toolbar.stroke_slider]:
             bottom_right = button.mapTo(window, button.rect().bottomRight())
             self.assertTrue(window.rect().contains(bottom_right), button.toolTip())
         received = []

@@ -1,13 +1,13 @@
 """Compact annotation controls and the drag surface replacing a native title bar."""
-from PySide6.QtCore import QPointF, QSize, Qt, Signal
-from PySide6.QtGui import QActionGroup, QColor, QPainter, QPen
+from PySide6.QtCore import QPointF, QSignalBlocker, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractButton, QApplication, QBoxLayout, QButtonGroup, QHBoxLayout, QLabel,
-    QMenu, QPushButton, QSpinBox, QToolButton, QVBoxLayout, QWidget, QWidgetAction,
+    QPushButton, QToolButton, QVBoxLayout, QWidget,
 )
 
 from .annotation_icons import toolbar_icon
-from .stroke_slider import StrokeSlider
+from .stroke_slider import ValueSlider
 
 
 class DragSurface(QWidget):
@@ -161,12 +161,20 @@ class AnnotationToolbar(DragSurface):
         custom_color.setFixedSize(24, 28)
         custom_color.clicked.connect(owner.choose_color)
         palette_layout.addWidget(custom_color)
-        self.stroke_slider = StrokeSlider()
-        self.stroke_slider.setValue(owner.canvas.stroke)
+        self.stroke_slider = ValueSlider(
+            minimum=1, maximum=50, value=owner.canvas.stroke, ticks=(2, 5, 10, 20),
+            suffix="px", accessible_name="线条粗细",
+            tooltip="线宽 1～50 px · 指数刻度\n拖动调整；点击选中后按 ← / → 微调 1 px")
         self.stroke_slider.valueChanged.connect(self.set_stroke)
-        self.font_button = self.setting_button("24 px", "文本字号")
-        self.font_button.setFixedWidth(48)
-        self.font_button.setMenu(self.number_menu("字号", [12, 16, 20, 24, 32, 48, 64], 10, 120, 24, self.set_font_size))
+        self.stroke_slider.sliderPressed.connect(owner.canvas.begin_style_edit)
+        self.stroke_slider.sliderReleased.connect(owner.canvas.end_style_edit)
+        self.font_slider = ValueSlider(
+            minimum=6, maximum=80, value=owner.canvas.font_size, ticks=(8, 12, 24, 48),
+            suffix="px", accessible_name="字体大小",
+            tooltip="字号 6～80 px · 指数刻度\n拖动调整；点击选中后按 ← / → 微调 1 px")
+        self.font_slider.valueChanged.connect(self.set_font_size)
+        self.font_slider.sliderPressed.connect(owner.canvas.begin_style_edit)
+        self.font_slider.sliderReleased.connect(owner.canvas.end_style_edit)
         self.dimensions = QLabel(f"{owner.canvas.base.width()} × {owner.canvas.base.height()}")
         self.dimensions.setObjectName("annotationMeta")
         self.dimensions.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -175,9 +183,9 @@ class AnnotationToolbar(DragSurface):
         self.fit_button.clicked.connect(owner.fit_to_screen)
         root.addWidget(self.properties_row)
         root.addWidget(self.stroke_row)
+        self.adapt_to_width(owner.width())
         self.select_tool("arrow")
         self.select_color(owner.canvas.color)
-        self.adapt_to_width(owner.width())
 
     def icon_button(self, icon, tooltip):
         button = QToolButton()
@@ -201,54 +209,43 @@ class AnnotationToolbar(DragSurface):
         button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         return button
 
-    def number_menu(self, label, presets, minimum, maximum, initial, callback):
-        menu = QMenu(self)
-        group = QActionGroup(menu)
-        for number in presets:
-            action = menu.addAction(f"{number} px")
-            action.setCheckable(True)
-            action.setChecked(number == initial)
-            group.addAction(action)
-            action.triggered.connect(lambda checked=False, value=number: callback(value))
-        menu.addSeparator()
-        row = QWidget()
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(8, 5, 8, 5)
-        layout.addWidget(QLabel(label))
-        spin = QSpinBox()
-        spin.setRange(minimum, maximum)
-        spin.setValue(initial)
-        spin.setSuffix(" px")
-        spin.setFixedWidth(82)
-        spin.valueChanged.connect(callback)
-        menu.aboutToShow.connect(lambda: spin.setValue(self.owner.canvas.font_size))
-        layout.addWidget(spin)
-        custom = QWidgetAction(menu)
-        custom.setDefaultWidget(row)
-        menu.addAction(custom)
-        menu.aboutToShow.connect(lambda: self._check_number_actions(group, spin.value()))
-        return menu
-
-    @staticmethod
-    def _check_number_actions(group, value):
-        for action in group.actions():
-            action.setChecked(action.text() == f"{value} px")
-
     def set_stroke(self, value):
         value = max(1, min(50, int(value)))
-        self.owner.canvas.stroke = value
-        self.owner.canvas.update_inline_style()
-        if self.stroke_slider.value() != value:
-            self.stroke_slider.setValue(value)
+        canvas = self.owner.canvas
+        canvas.stroke = value
+        if not canvas.update_selected_style(width=value):
+            canvas.update_inline_style()
+        self._sync_slider(self.stroke_slider, value)
 
     def set_font_size(self, value):
-        self.owner.canvas.font_size = value
-        self.font_button.setText(f"{value} px")
-        self.owner.canvas.update_inline_style()
+        value = max(6, min(80, int(value)))
+        canvas = self.owner.canvas
+        canvas.font_size = value
+        if not canvas.update_selected_style(font_size=value):
+            canvas.update_inline_style()
+        self._sync_slider(self.font_slider, value)
+
+    @staticmethod
+    def _sync_slider(slider, value):
+        if slider.value() != value:
+            with QSignalBlocker(slider):
+                slider.setValue(value)
+
+    def sync_sliders(self, tool=None):
+        """Show the selected annotation's width and font size in the sliders."""
+        canvas = self.owner.canvas
+        tool = canvas.tool if tool is None else tool
+        selected = canvas.selected_operation()
+        is_text = selected is not None and selected.get("kind") == "text"
+        self.font_slider.setVisible(tool == "text" or (tool == "select" and is_text))
+        self._sync_slider(self.stroke_slider, selected["width"] if selected is not None else canvas.stroke)
+        value = selected.get("font_size", canvas.font_size) if is_text else canvas.font_size
+        self._sync_slider(self.font_slider, value)
+        self.layout().invalidate()
 
     def select_tool(self, tool):
         self.tool_buttons[tool].setChecked(True)
-        self.font_button.setVisible(tool == "text")
+        self.sync_sliders(tool)
 
     def select_color(self, color):
         self.colors.setExclusive(False)
@@ -267,10 +264,10 @@ class AnnotationToolbar(DragSurface):
             if not compact:
                 self.properties_layout.addSpacing(4)
                 self.properties_layout.addWidget(self.stroke_slider, 1)
-                self.properties_layout.addWidget(self.font_button)
+                self.properties_layout.addWidget(self.font_slider, 1)
             else:
                 self.stroke_layout.addWidget(self.stroke_slider, 1)
-                self.stroke_layout.addWidget(self.font_button)
+                self.stroke_layout.addWidget(self.font_slider, 1)
                 self.stroke_layout.addStretch(1)
             self.properties_layout.addStretch(1)
             self.properties_layout.addWidget(self.dimensions)

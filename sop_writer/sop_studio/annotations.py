@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from .annotation_geometry import tapered_arrow_path
-from .annotation_text import InlineTextFrame, annotation_text_box, make_annotation_text
+from .annotation_text import InlineTextFrame, annotation_text_box, fit_text_operation_box, make_annotation_text
 from .annotation_toolbar import AnnotationToolbar
 from .style import ANNOTATION_STYLE
 
@@ -180,6 +180,7 @@ class AnnotationCanvas(QGraphicsView):
         self.undo_states = []
         self.redo_states = []
         self.selected_index = None
+        self._style_edit_state = None
         self.mosaic_cache = {}
         self.current = None
         self.inline_frame = None
@@ -361,6 +362,44 @@ class AnnotationCanvas(QGraphicsView):
     def update_inline_style(self):
         if self.inline_frame is not None:
             self.inline_frame.update_style(self.color, self.font_size, self.stroke)
+
+    def update_selected_style(self, **changes):
+        """Edit the selected annotation while keeping it selected.
+
+        Slider drags wrap their updates in begin_style_edit/end_style_edit so
+        the whole gesture becomes a single undo step.
+        """
+        if self.tool != "select":
+            return False
+        index = self.selected_index
+        operation = self.selected_operation()
+        if operation is None:
+            return False
+        updated = dict(operation)
+        updated.update(changes)
+        if "font_size" in changes and updated.get("kind") == "text":
+            fit_text_operation_box(updated)
+        if updated == operation:
+            return True
+        if self._style_edit_state is None:
+            self.undo_states.append(self.operations[:])
+            self.redo_states.clear()
+            self.history_changed.emit()
+        self.operations[index] = updated
+        self.refresh_markup()
+        return True
+
+    def begin_style_edit(self):
+        if self._style_edit_state is None and self.selected_operation() is not None:
+            self._style_edit_state = self.operations[:]
+
+    def end_style_edit(self):
+        snapshot = self._style_edit_state
+        self._style_edit_state = None
+        if snapshot is not None and snapshot != self.operations:
+            self.undo_states.append(snapshot)
+            self.redo_states.clear()
+            self.history_changed.emit()
 
     def finish_text_edit(self, cancel=False):
         frame = self.inline_frame
@@ -584,6 +623,7 @@ class AnnotationWindow(QDialog):
                    and self.canvas.inline_frame is None)
         for shortcut in self.delete_shortcuts:
             shortcut.setEnabled(enabled)
+        self.toolbar.sync_sliders()
 
     def text_editing_changed(self, editing):
         for shortcut in self.tool_shortcuts:
