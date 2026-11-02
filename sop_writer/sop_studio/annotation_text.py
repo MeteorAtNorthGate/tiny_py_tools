@@ -12,7 +12,8 @@ def make_annotation_text(operation):
     document.setDefaultFont(font)
     document.setDocumentMargin(10)
     option = QTextOption()
-    option.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+    option.setWrapMode(QTextOption.WrapMode.NoWrap if operation.get("auto_width")
+                       else QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
     document.setDefaultTextOption(option)
     document.setPlainText(operation.get("text", ""))
     document.setTextWidth(max(32, rect.width()))
@@ -21,7 +22,9 @@ def make_annotation_text(operation):
 
 def annotation_text_box(operation, document):
     rect = QRectF(QPointF(*operation["points"][0]), QPointF(*operation["points"][-1])).normalized()
-    return QRectF(rect.x(), rect.y(), document.textWidth(), max(rect.height(), document.size().height()))
+    size = document.size()
+    width = max(32, rect.width(), size.width()) if operation.get("auto_width") else document.textWidth()
+    return QRectF(rect.x(), rect.y(), width, max(rect.height(), size.height()))
 
 
 class InlineTextFrame(QGraphicsObject):
@@ -30,6 +33,7 @@ class InlineTextFrame(QGraphicsObject):
         self.canvas = canvas
         self.operation = operation
         self.document = make_annotation_text(operation)
+        self._updating_box = False
         self.box = annotation_text_box(operation, self.document)
         self.setPos(self.box.topLeft())
         self.setZValue(100)
@@ -38,6 +42,7 @@ class InlineTextFrame(QGraphicsObject):
         self.text_item.setDefaultTextColor(QColor(operation["color"]))
         self.document.setParent(self.text_item)
         self.document.contentsChanged.connect(self.update_box)
+        self.document.documentLayout().documentSizeChanged.connect(lambda _: self.update_box())
         self.document.undoAvailable.connect(lambda _: canvas.history_changed.emit())
         self.document.redoAvailable.connect(lambda _: canvas.history_changed.emit())
 
@@ -52,10 +57,16 @@ class InlineTextFrame(QGraphicsObject):
         painter.drawRoundedRect(QRectF(0, 0, self.box.width(), self.box.height()), 5, 5)
 
     def update_box(self):
-        self.prepareGeometryChange()
-        self.box = annotation_text_box(self.operation, self.document)
-        self.update()
-        self.canvas.history_changed.emit()
+        if self._updating_box:
+            return
+        self._updating_box = True
+        try:
+            self.prepareGeometryChange()
+            self.box = annotation_text_box(self.operation, self.document)
+            self.update()
+            self.canvas.history_changed.emit()
+        finally:
+            self._updating_box = False
 
     def update_style(self, color, font_size, width):
         self.prepareGeometryChange()

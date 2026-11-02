@@ -9,7 +9,14 @@ def _paint(painter, name, color):
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     painter.setPen(QPen(color, 1.7, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
     painter.setBrush(Qt.BrushStyle.NoBrush)
-    if name == "arrow":
+    if name == "select":
+        path = QPainterPath(QPointF(5, 3))
+        for point in (QPointF(19, 12), QPointF(13, 13), QPointF(16, 20),
+                      QPointF(12, 22), QPointF(9, 15), QPointF(5, 19)):
+            path.lineTo(point)
+        path.closeSubpath()
+        painter.drawPath(path)
+    elif name == "arrow":
         painter.drawLine(QPointF(5, 19), QPointF(19, 5))
         painter.drawPolyline([QPointF(10, 5), QPointF(19, 5), QPointF(19, 14)])
     elif name == "tapered_arrow":

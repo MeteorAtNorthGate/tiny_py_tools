@@ -89,10 +89,12 @@ class AnnotationToolbar(DragSurface):
         tools.addWidget(grip)
         self.group = QButtonGroup(self)
         self.tool_buttons = {}
-        for label, name, key in [("矩形", "rectangle", "R"), ("箭头", "arrow", "A"), ("渐尖箭头", "tapered_arrow", "B"),
+        for label, name, key in [("选择", "select", "V"), ("矩形", "rectangle", "R"), ("箭头", "arrow", "A"), ("渐尖箭头", "tapered_arrow", "B"),
                                   ("涂鸦", "pen", "P"), ("文本框", "text", "T"), ("马赛克", "mosaic", "M")]:
             button = self.icon_button(name, f"{label}  ·  {key}")
             button.setAccessibleName(label)
+            if name == "select":
+                button.setToolTip("选择标记  ·  V\n单击标记选中，Delete / Backspace 删除")
             button.setCheckable(True)
             self.group.addButton(button)
             button.clicked.connect(lambda checked=False, tool=name: self.tool_selected.emit(tool))
@@ -255,7 +257,7 @@ class AnnotationToolbar(DragSurface):
         self.colors.setExclusive(True)
 
     def adapt_to_width(self, width):
-        compact = width < 500
+        compact = width < 540
         self.main_layout.setDirection(QBoxLayout.Direction.TopToBottom if compact else QBoxLayout.Direction.LeftToRight)
         if compact != self._properties_compact:
             for layout in (self.properties_layout, self.stroke_layout):

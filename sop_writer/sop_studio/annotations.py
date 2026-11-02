@@ -108,6 +108,38 @@ def render_annotation(base: QImage, operations: list[dict]) -> QImage:
     return result
 
 
+def operation_shape(operation):
+    """Hit test the painted footprint, including hollow rectangles and brush paths."""
+    points = [QPointF(*point) for point in operation["points"]]
+    start, end = points[0], points[-1]
+    width = operation["width"]
+    kind = operation["kind"]
+    if kind in ("pen", "mosaic"):
+        return brush_path(points, width)
+    if kind == "tapered_arrow":
+        return tapered_arrow_path(start, end, width)
+    path = QPainterPath()
+    if kind == "text":
+        path.addRoundedRect(annotation_text_box(operation, make_annotation_text(operation)), 5, 5)
+        return path
+    if kind == "arrow":
+        angle = math.atan2(end.y() - start.y(), end.x() - start.x())
+        length = max(15, width * 4)
+        neck = end - QPointF(math.cos(angle) * length * .65, math.sin(angle) * length * .65)
+        left = end - QPointF(math.cos(angle - .48) * length, math.sin(angle - .48) * length)
+        right = end - QPointF(math.cos(angle + .48) * length, math.sin(angle + .48) * length)
+        path.addPolygon(QPolygonF([end, left, right]))
+        path.closeSubpath()
+        return path.united(brush_path([start, neck], width))
+    if kind == "rectangle":
+        path.addRoundedRect(QRectF(start, end).normalized(), 3, 3)
+        stroker = QPainterPathStroker()
+        stroker.setWidth(width)
+        stroker.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        return stroker.createStroke(path)
+    return path
+
+
 class AnnotationLayer(QGraphicsItem):
     """Markup sits above the screenshot and below the active text editor."""
     def __init__(self, canvas):
@@ -123,18 +155,31 @@ class AnnotationLayer(QGraphicsItem):
     def paint(self, painter, option, widget=None):
         operations = self.canvas.operations + ([self.canvas.current] if self.canvas.current else [])
         draw_operations(painter, self.canvas.base, operations, self.canvas.mosaic_cache)
+        selected = self.canvas.selected_operation()
+        if self.canvas.tool == "select" and selected is not None:
+            margin = 3 / max(.01, self.canvas.transform().m11())
+            bounds = operation_shape(selected).boundingRect().adjusted(-margin, -margin, margin, margin)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            pen = QPen(QColor("#3269e2"), 1.2, Qt.PenStyle.DashLine)
+            pen.setCosmetic(True)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(bounds)
 
 
 class AnnotationCanvas(QGraphicsView):
     history_changed = Signal()
     zoom_requested = Signal(float)
     editing_changed = Signal(bool)
+    selection_changed = Signal()
 
     def __init__(self, image: QImage, parent=None):
         super().__init__(parent)
         self.base = image.copy()
         self.operations = []
-        self.redo_operations = []
+        self.undo_states = []
+        self.redo_states = []
+        self.selected_index = None
         self.mosaic_cache = {}
         self.current = None
         self.inline_frame = None
@@ -183,6 +228,55 @@ class AnnotationCanvas(QGraphicsView):
         self.markup_layer.update()
         self.viewport().update()
 
+    def selected_operation(self):
+        index = self.selected_index
+        return self.operations[index] if index is not None and 0 <= index < len(self.operations) else None
+
+    def clear_selection(self):
+        if self.selected_index is not None:
+            self.selected_index = None
+            self.selection_changed.emit()
+            self.refresh_markup()
+
+    def select_at(self, point):
+        selected = None
+        tolerance = QPainterPathStroker()
+        tolerance.setWidth(10 / max(.01, self.transform().m11()))
+        tolerance.setCapStyle(Qt.PenCapStyle.RoundCap)
+        tolerance.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        for index in range(len(self.operations) - 1, -1, -1):
+            shape = operation_shape(self.operations[index])
+            if shape.contains(point) or tolerance.createStroke(shape).contains(point):
+                selected = index
+                break
+        if selected != self.selected_index:
+            self.selected_index = selected
+            self.selection_changed.emit()
+        self.refresh_markup()
+
+    def update_cursor(self):
+        if self.window_drag is not None:
+            cursor = Qt.CursorShape.ClosedHandCursor
+        elif self.space_down:
+            cursor = Qt.CursorShape.OpenHandCursor
+        else:
+            cursor = Qt.CursorShape.ArrowCursor if self.tool == "select" else Qt.CursorShape.CrossCursor
+        self.setCursor(cursor)
+
+    def change_operations(self, operations):
+        # Finished operations are immutable; shallow snapshots share stroke points.
+        self.undo_states.append(self.operations[:])
+        self.operations = operations
+        self.redo_states.clear()
+        self.clear_selection()
+        self.history_changed.emit()
+        self.refresh_markup()
+
+    def delete_selected(self):
+        if self.tool == "select" and self.inline_frame is None and self.selected_operation() is not None:
+            index = self.selected_index
+            self.change_operations(self.operations[:index] + self.operations[index + 1:])
+
     def point(self, event):
         point = self.mapToScene(event.position().toPoint())
         return [max(0, min(self.base.width(), point.x())), max(0, min(self.base.height(), point.y()))]
@@ -199,6 +293,11 @@ class AnnotationCanvas(QGraphicsView):
                     super().mousePressEvent(event)
                     return
                 self.finish_text_edit()
+            self.setFocus(Qt.FocusReason.MouseFocusReason)
+            if self.tool == "select":
+                self.select_at(self.mapToScene(event.position().toPoint()))
+                event.accept()
+                return
             point = self.point(event)
             self.current = {"kind": self.tool, "points": [point] if self.tool in ("pen", "mosaic") else [point, point], "color": self.color,
                             "width": self.stroke, "font_size": self.font_size}
@@ -220,7 +319,7 @@ class AnnotationCanvas(QGraphicsView):
     def mouseReleaseEvent(self, event):
         if self.window_drag is not None:
             self.window_drag = None
-            self.setCursor(Qt.CursorShape.OpenHandCursor if self.space_down else Qt.CursorShape.CrossCursor)
+            self.update_cursor()
             event.accept()
         elif self.current and event.button() == Qt.MouseButton.LeftButton:
             self.extend_current(self.point(event))
@@ -229,10 +328,9 @@ class AnnotationCanvas(QGraphicsView):
             if operation["kind"] == "text":
                 self.begin_text_edit(operation)
                 return
-            self.operations.append(operation)
-            self.redo_operations.clear()
-            self.history_changed.emit()
-            self.refresh_markup()
+            self.change_operations(self.operations + [operation])
+        elif self.tool == "select" and event.button() == Qt.MouseButton.LeftButton:
+            event.accept()
         else:
             super().mouseReleaseEvent(event)
 
@@ -245,6 +343,7 @@ class AnnotationCanvas(QGraphicsView):
 
     def begin_text_edit(self, operation):
         rect = QRectF(QPointF(*operation["points"][0]), QPointF(*operation["points"][-1])).normalized()
+        operation["auto_width"] = rect.width() < 8 and rect.height() < 8
         if rect.width() < 8:
             rect.setWidth(min(260, max(32, self.base.width() - rect.x())))
         if rect.height() < 8:
@@ -276,8 +375,7 @@ class AnnotationCanvas(QGraphicsView):
         frame.deleteLater()
         if not cancel and text.strip():
             operation["text"] = text
-            self.operations.append(operation)
-            self.redo_operations.clear()
+            self.change_operations(self.operations + [operation])
         self.setFocus(Qt.FocusReason.OtherFocusReason)
         self.editing_changed.emit(False)
         self.history_changed.emit()
@@ -287,8 +385,10 @@ class AnnotationCanvas(QGraphicsView):
         if self.inline_frame is not None:
             self.inline_frame.document.undo()
             return
-        if self.operations:
-            self.redo_operations.append(self.operations.pop())
+        if self.undo_states or self.operations:
+            self.redo_states.append(self.operations[:])
+            self.operations = self.undo_states.pop() if self.undo_states else self.operations[:-1]
+            self.clear_selection()
             self.refresh_markup()
             self.history_changed.emit()
 
@@ -296,8 +396,10 @@ class AnnotationCanvas(QGraphicsView):
         if self.inline_frame is not None:
             self.inline_frame.document.redo()
             return
-        if self.redo_operations:
-            self.operations.append(self.redo_operations.pop())
+        if self.redo_states:
+            self.undo_states.append(self.operations[:])
+            self.operations = self.redo_states.pop()
+            self.clear_selection()
             self.refresh_markup()
             self.history_changed.emit()
 
@@ -312,6 +414,9 @@ class AnnotationCanvas(QGraphicsView):
     def keyPressEvent(self, event):
         if self.inline_frame is not None:
             super().keyPressEvent(event)
+        elif event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            self.delete_selected()
+            event.accept()
         elif event.key() == Qt.Key.Key_Space:
             self.space_down = True
             self.setCursor(Qt.CursorShape.OpenHandCursor)
@@ -322,7 +427,7 @@ class AnnotationCanvas(QGraphicsView):
     def keyReleaseEvent(self, event):
         if event.key() == Qt.Key.Key_Space:
             self.space_down = False
-            self.setCursor(Qt.CursorShape.CrossCursor)
+            self.update_cursor()
             event.accept()
         else:
             super().keyReleaseEvent(event)
@@ -330,7 +435,7 @@ class AnnotationCanvas(QGraphicsView):
     def focusOutEvent(self, event):
         self.space_down = False
         self.window_drag = None
-        self.setCursor(Qt.CursorShape.CrossCursor)
+        self.update_cursor()
         super().focusOutEvent(event)
 
 
@@ -360,23 +465,33 @@ class AnnotationWindow(QDialog):
         self.redo_button = self.toolbar.redo_button
         self.group = self.toolbar.group
         self.tool_shortcuts = []
-        for name, key in [("arrow", "A"), ("tapered_arrow", "B"), ("text", "T"), ("mosaic", "M"), ("pen", "P"), ("rectangle", "R")]:
+        for name, key in [("select", "V"), ("arrow", "A"), ("tapered_arrow", "B"), ("text", "T"), ("mosaic", "M"), ("pen", "P"), ("rectangle", "R")]:
             shortcut = QShortcut(QKeySequence(key), self)
             shortcut.activated.connect(self.toolbar.tool_buttons[name].click)
             self.tool_shortcuts.append(shortcut)
         for key, callback in [("Ctrl+Z", self.canvas.undo), ("Ctrl+Y", self.canvas.redo), ("Ctrl+Shift+Z", self.canvas.redo), ("Ctrl+Return", self.insert)]:
             shortcut = QShortcut(QKeySequence(key), self)
             shortcut.activated.connect(callback)
+        self.delete_shortcuts = []
+        for key in ("Delete", "Backspace"):
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.activated.connect(self.canvas.delete_selected)
+            self.delete_shortcuts.append(shortcut)
         self.canvas.history_changed.connect(self.update_history)
         self.canvas.editing_changed.connect(self.text_editing_changed)
+        self.canvas.selection_changed.connect(self.update_selection_actions)
         self.canvas.zoom_requested.connect(self.zoom_window)
         self.update_history()
+        self.update_selection_actions()
         self.fit_to_screen()
 
     def set_tool(self, tool):
         self.canvas.finish_text_edit()
         self.canvas.tool = tool
+        self.canvas.clear_selection()
+        self.canvas.update_cursor()
         self.toolbar.select_tool(tool)
+        self.update_selection_actions()
         self.sync_geometry()
 
     def set_color(self, color):
@@ -447,7 +562,7 @@ class AnnotationWindow(QDialog):
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
-        for tool, text in [("arrow", "箭头  A"), ("tapered_arrow", "渐尖箭头  B"), ("pen", "涂鸦  P"), ("rectangle", "矩形  R"), ("text", "文本框  T"), ("mosaic", "马赛克  M")]:
+        for tool, text in [("select", "选择  V"), ("arrow", "箭头  A"), ("tapered_arrow", "渐尖箭头  B"), ("pen", "涂鸦  P"), ("rectangle", "矩形  R"), ("text", "文本框  T"), ("mosaic", "马赛克  M")]:
             menu.addAction(text, lambda name=tool: self.set_tool(name))
         menu.addSeparator()
         menu.addAction("适应屏幕", self.fit_to_screen)
@@ -461,12 +576,19 @@ class AnnotationWindow(QDialog):
             self.undo_button.setEnabled(document.isUndoAvailable())
             self.redo_button.setEnabled(document.isRedoAvailable())
         else:
-            self.undo_button.setEnabled(bool(self.canvas.operations))
-            self.redo_button.setEnabled(bool(self.canvas.redo_operations))
+            self.undo_button.setEnabled(bool(self.canvas.undo_states or self.canvas.operations))
+            self.redo_button.setEnabled(bool(self.canvas.redo_states))
+
+    def update_selection_actions(self):
+        enabled = (self.canvas.tool == "select" and self.canvas.selected_operation() is not None
+                   and self.canvas.inline_frame is None)
+        for shortcut in self.delete_shortcuts:
+            shortcut.setEnabled(enabled)
 
     def text_editing_changed(self, editing):
         for shortcut in self.tool_shortcuts:
             shortcut.setEnabled(not editing)
+        self.update_selection_actions()
 
     def insert(self):
         self.canvas.finish_text_edit()
