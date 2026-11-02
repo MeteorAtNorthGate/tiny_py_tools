@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import os
 import sys
 import threading
 import time
@@ -11,6 +12,8 @@ from ctypes import wintypes
 from PySide6.QtCore import QAbstractNativeEventFilter, QObject, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QImage, QKeySequence
 from PySide6.QtWidgets import QApplication
+
+from .windows_snipping import repair_windows_snipping, snipping_window_state, wake_windows_snipping
 
 
 class GlobalHotkey(QObject, QAbstractNativeEventFilter):
@@ -203,43 +206,17 @@ def modifiers_held() -> bool:
 
 
 def launch_windows_snipping():
-    """Send the real Windows shortcut, avoiding version-specific Snipping Tool URIs."""
+    """Open the clipboard-based system overlay without synthesizing a hotkey."""
     if sys.platform != "win32":
         raise OSError("系统截图仅支持 Windows。")
-
-    class MouseInput(ctypes.Structure):
-        _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG), ("data", wintypes.DWORD),
-                    ("flags", wintypes.DWORD), ("time", wintypes.DWORD), ("extra", ctypes.c_size_t)]
-
-    class KeyboardInput(ctypes.Structure):
-        _fields_ = [("key", wintypes.WORD), ("scan", wintypes.WORD), ("flags", wintypes.DWORD),
-                    ("time", wintypes.DWORD), ("extra", ctypes.c_size_t)]
-
-    class HardwareInput(ctypes.Structure):
-        _fields_ = [("message", wintypes.DWORD), ("low", wintypes.WORD), ("high", wintypes.WORD)]
-
-    class InputUnion(ctypes.Union):
-        _fields_ = [("mouse", MouseInput), ("keyboard", KeyboardInput), ("hardware", HardwareInput)]
-
-    class Input(ctypes.Structure):
-        _fields_ = [("type", wintypes.DWORD), ("data", InputUnion)]
-
-    events = (Input * 6)()
-    for event, (key, up) in zip(events, [(0x5B, False), (0xA0, False), (0x53, False),
-                                        (0x53, True), (0xA0, True), (0x5B, True)]):
-        event.type = 1  # INPUT_KEYBOARD
-        event.data.keyboard = KeyboardInput(key, 0, 2 if up else 0, 0, 0)
-    user = ctypes.WinDLL("user32", use_last_error=True)
-    user.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(Input), ctypes.c_int]
-    user.SendInput.restype = wintypes.UINT
-    if user.SendInput(len(events), events, ctypes.sizeof(Input)) != len(events):
-        # Release any modifiers inserted before a partial failure.
-        releases = (Input * 3)()
-        for event, key in zip(releases, (0x53, 0xA0, 0x5B)):
-            event.type = 1
-            event.data.keyboard = KeyboardInput(key, 0, 2, 0, 0)
-        user.SendInput(len(releases), releases, ctypes.sizeof(Input))
-        raise OSError("无法打开系统截图，请直接按 Win+Shift+S。")
+    # SendInput succeeding only confirms delivery into the input stream; the shell
+    # may ignore the synthetic Win+Shift+S. Use the same URI as the system shortcut.
+    # Keep the clipboard entry point: the newer capture/image protocol requires
+    # an MSIX identity and a redirect-uri, neither of which this desktop app has.
+    try:
+        os.startfile("ms-screenclip://?source=HotKey")
+    except OSError as error:
+        raise OSError(f"无法打开 Windows 截图，请检查系统截图工具或直接按 Win+Shift+S。\n{error}") from error
 
 
 class SystemCapture(QObject):
@@ -248,6 +225,7 @@ class SystemCapture(QObject):
     image_ready = Signal(QImage)
     cancelled = Signal(str)
     failed = Signal(str)
+    progress = Signal(str)
 
     def __init__(self, parent=None, native=True, clipboard=None, sequence_getter=None):
         super().__init__(parent)
@@ -273,12 +251,18 @@ class SystemCapture(QObject):
         self.launch_timer.setInterval(40)
         self.launch_timer.timeout.connect(self._launch_when_released)
         self.launch_deadline = 0
+        self.launch_phase = None
+        self.launch_phase_deadline = 0
+        self.launch_error = ""
+        self.launch_verify_timer = QTimer(self)
+        self.launch_verify_timer.setInterval(150)
+        self.launch_verify_timer.timeout.connect(self._verify_launch)
 
     def start(self):
         if self.native:
             self.listener.start()
 
-    def arm(self, baseline=None):
+    def arm(self, baseline=None, *, watch_launch=False):
         if self.pending:
             return
         self.baseline = self.sequence_getter() if baseline is None else baseline
@@ -287,9 +271,19 @@ class SystemCapture(QObject):
         self.timeout_timer.start()
         # A queued shortcut notification may arrive after the clipboard notification.
         self.check_clipboard()
+        if self.pending and watch_launch:
+            # The real Win+Shift+S is passed to Windows; recover only if its UI
+            # fails to appear. Do not send another launch request immediately.
+            self.launch_error = ""
+            self.launch_phase = "first"
+            self.launch_phase_deadline = time.monotonic() + 2
+            self.launch_verify_timer.start()
 
     def request(self):
+        if self.pending:
+            return
         self.arm()
+        self.launch_error = ""
         self.launch_deadline = time.monotonic() + 3
         self.launch_timer.start()
 
@@ -303,11 +297,86 @@ class SystemCapture(QObject):
                 self.failed.emit("截图快捷键仍被按住，请松开按键后重试。")
             return
         self.launch_timer.stop()
+        self._try_launch("first")
+
+    def _try_launch(self, phase):
+        if not self.pending:
+            return
+        self.launch_phase = phase
+        self.launch_phase_deadline = time.monotonic() + (2 if phase == "first" else 3)
         try:
             launch_windows_snipping()
         except OSError as error:
-            self.cancel("cancelled")
-            self.failed.emit(str(error))
+            self.launch_error = str(error)
+            if phase == "first":
+                self._recover_launcher()
+            else:
+                self.launch_phase_deadline = time.monotonic()
+                self.launch_verify_timer.start()
+                self._verify_launch()
+            return
+        self.launch_verify_timer.start()
+
+    def _verify_launch(self):
+        if not self.pending or self.launch_phase is None:
+            self.launch_verify_timer.stop()
+            return
+        if self.launch_phase == "warming":
+            if time.monotonic() >= self.launch_phase_deadline:
+                self._try_launch("retry")
+            return
+        try:
+            overlay, tool = snipping_window_state()
+        except OSError as error:
+            logging.warning("Cannot inspect Windows screenshot UI: %s", error)
+            self.launch_error = str(error)
+            overlay, tool = False, False
+        if overlay:
+            self.launch_verify_timer.stop()
+            self.launch_phase = None
+        elif time.monotonic() >= self.launch_phase_deadline:
+            if self.launch_phase == "first":
+                self._recover_launcher()
+            elif tool:
+                self.launch_verify_timer.stop()
+                self.launch_phase = None
+                self.progress.emit("已打开 Windows 截图工具，请点击“新建”完成截图；Esc 取消。")
+            else:
+                self._launch_failed()
+
+    def _recover_launcher(self):
+        # A late clipboard update or a just-opened overlay must win over recovery.
+        self.check_clipboard()
+        if not self.pending:
+            return
+        try:
+            if snipping_window_state()[0]:
+                self.launch_verify_timer.stop()
+                self.launch_phase = None
+                return
+        except OSError:
+            pass
+        self.progress.emit("系统截图未响应，正在清理残留组件、唤醒截图工具并重试…")
+        try:
+            repaired = repair_windows_snipping()
+            logging.warning("Retrying Windows screenshot activation; restarted %s inactive hosts", repaired)
+        except OSError as error:
+            logging.warning("Cannot restart inactive Windows screenshot host: %s", error)
+        try:
+            wake_windows_snipping()
+        except OSError as error:
+            self.launch_error = str(error)
+            logging.warning("Cannot wake Windows Snipping Tool: %s", error)
+        self.launch_phase = "warming"
+        self.launch_phase_deadline = time.monotonic() + .8
+        self.launch_verify_timer.start()
+
+    def _launch_failed(self):
+        message = "Windows 截图界面未能打开，已尝试唤醒、清理和重试。请手动打开截图工具后重试。"
+        if self.launch_error:
+            message += f"\n{self.launch_error}"
+        self.cancel("cancelled")
+        self.failed.emit(message)
 
     @Slot()
     def _clipboard_changed(self):
@@ -343,6 +412,8 @@ class SystemCapture(QObject):
         self.poll_timer.stop()
         self.timeout_timer.stop()
         self.launch_timer.stop()
+        self.launch_verify_timer.stop()
+        self.launch_phase = None
 
     @Slot()
     def cancel_from_keyboard(self):

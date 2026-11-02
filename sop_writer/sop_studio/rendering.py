@@ -21,7 +21,7 @@ LINE_HEIGHT_FACTOR = 1.2
 def apply_line_spacing(document: QTextDocument, factor: float = LINE_HEIGHT_FACTOR):
     """Apply a proportional line height to every block, including new ones."""
     block_format = QTextBlockFormat()
-    block_format.setLineHeight(factor * 100, QTextBlockFormat.LineHeightTypes.ProportionalHeight)
+    block_format.setLineHeight(factor * 100, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
     cursor = QTextCursor(document)
     cursor.select(QTextCursor.SelectionType.Document)
     cursor.mergeBlockFormat(block_format)

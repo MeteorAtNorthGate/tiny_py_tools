@@ -102,6 +102,7 @@ class MainWindow(QMainWindow):
         self.system_capture.image_ready.connect(self.captured)
         self.system_capture.cancelled.connect(self.cancel_capture)
         self.system_capture.failed.connect(self.capture_failed)
+        self.system_capture.progress.connect(lambda message: self.statusBar().showMessage(message, 60000))
         if not test_mode:
             sequence = self.settings.value("capture_hotkey", "Ctrl+1")
             try:
@@ -951,7 +952,7 @@ class MainWindow(QMainWindow):
         self.canvas.finish_edit()
         self.capture_busy = True
         self.statusBar().showMessage("已检测到 Win+Shift+S，等待截图写入剪贴板…", 60000)
-        self.system_capture.arm(baseline)
+        self.system_capture.arm(baseline, watch_launch=True)
 
     def set_auto_receive_snips(self, enabled):
         self.auto_receive_snips = enabled
