@@ -181,10 +181,11 @@ class RenderingTests(unittest.TestCase):
         self.assertNotEqual(result, original.convertToFormat(result.format()))
         self.assertEqual(result.pixelColor(0, 0), original.pixelColor(0, 0))
         self.assertEqual(result.pixelColor(40, 40), result.pixelColor(41, 40))
+        self.assertEqual(result.pixelColor(40, 80), original.pixelColor(40, 80))
 
     def test_all_annotation_tools_produce_visible_content(self):
         base = sample_image()
-        for kind in ["arrow", "text", "pen", "rectangle"]:
+        for kind in ["arrow", "tapered_arrow", "text", "pen", "rectangle"]:
             with self.subTest(tool=kind):
                 operation = {"kind": kind, "points": [[240, 130], [450, 250]], "color": "#ef4444", "width": 4, "text": "点击确认", "font_size": 24}
                 result = render_annotation(base, [operation])

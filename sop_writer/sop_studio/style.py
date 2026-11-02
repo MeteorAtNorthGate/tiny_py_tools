@@ -39,6 +39,27 @@ QSplitter::handle { background: #e0e6ef; width: 1px; }
 QToolTip { background: #1f2d45; color: #ffffff; border: none; padding: 6px; }
 """
 
+ANNOTATION_STYLE = """
+QDialog#annotationWindow { background: #ffffff; }
+QWidget#annotationToolbar { background: #fcfdff; border-top: 1px solid #e1e6ee; }
+QToolButton#annotationTool { background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 0; color: #536176; }
+QToolButton#annotationTool:hover { background: #edf2fa; }
+QToolButton#annotationTool:pressed { background: #dfe9fb; }
+QToolButton#annotationTool:checked { background: #e8efff; border-color: #cbdafa; color: #3168df; }
+QToolButton#annotationTool:disabled { background: transparent; color: #bec6d1; }
+QToolButton#annotationSetting { background: transparent; border: none; border-radius: 5px; padding: 1px 3px; color: #65738a; font-size: 11px; }
+QToolButton#annotationSetting:hover { background: #edf2fa; color: #3168df; }
+QToolButton#annotationSetting::menu-indicator { image: none; width: 0; }
+QPushButton#annotationInsert { background: #3269e2; border: none; border-radius: 6px; color: #ffffff; padding: 0 12px; font-weight: 600; }
+QPushButton#annotationInsert:hover { background: #2558cb; }
+QPushButton#annotationInsert:pressed { background: #1f4db7; }
+QLabel#annotationMeta { color: #929daf; font-family: 'Segoe UI'; font-size: 11px; background: transparent; }
+QWidget#annotationSeparator { background: #e2e7f0; }
+QMenu { background: #ffffff; color: #3d4b60; border: 1px solid #e1e6ef; border-radius: 6px; padding: 5px; }
+QMenu::item { padding: 7px 22px; border-radius: 4px; }
+QMenu::item:selected { background: #edf3ff; }
+"""
+
 
 def apply_style(app):
     """The Windows offscreen Qt backend doesn't discover installed system fonts."""

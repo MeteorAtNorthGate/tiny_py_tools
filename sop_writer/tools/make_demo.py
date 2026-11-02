@@ -54,7 +54,7 @@ def console_image():
 def sample_document():
     original = console_image()
     annotated = render_annotation(original, [
-        {"kind": "mosaic", "points": [[172, 286], [418, 327]], "width": 5, "color": "#ef4444"},
+        {"kind": "mosaic", "points": [[180, 307], [270, 307], [400, 307]], "width": 40, "color": "#ef4444"},
         {"kind": "rectangle", "points": [[155, 180], [1027, 246]], "width": 4, "color": "#ef4444"},
         {"kind": "arrow", "points": [[700, 360], [855, 423]], "width": 6, "color": "#ef4444"},
         {"kind": "text", "points": [[480, 300], [740, 352]], "width": 3, "color": "#e94b4b", "font_size": 23, "text": "确认信息后，点击这里"},
