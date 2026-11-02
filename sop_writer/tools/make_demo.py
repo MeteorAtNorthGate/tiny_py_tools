@@ -80,7 +80,7 @@ def sample_document():
         text("SOP  /  QUICK START                                             02", 43, 16, True, "#5479c9", 40),
         text("让每一步都清晰", 103, 40, True, height=80),
         text("你的快捷工作流", 238, 28, True),
-        text("1.  Ctrl+1：框选需要说明的屏幕区域。\n\n2.  A / T / M / P：箭头、文字、马赛克、涂鸦。\n\n3.  Ctrl+Enter：插入当前文档。\n\n4.  拖动位置，拖右下角缩放。\n\n5.  Ctrl+S 保存；Ctrl+E 导出 PDF。", 338, 24, height=540),
+        text("1.  Win+Shift+S：用 Windows 截图，自动打开标注。\n\n2.  A / T / M / P：箭头、文字、马赛克、涂鸦。\n\n3.  Ctrl+Enter：插入当前文档。\n\n4.  拖动位置，拖右下角缩放。\n\n5.  Ctrl+S 保存；Ctrl+E 导出 PDF。", 338, 24, height=540),
         text("完成前检查", 944, 28, True),
         text("□  步骤是否按顺序排列？\n□  关键按钮是否清楚标记？\n□  隐私信息是否完成遮挡？\n□  是否保存了可继续编辑的 .sopx 文件？", 1034, 22, height=230),
     ]

@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QApplication
 
 from sop_studio.annotations import AnnotationWindow, render_annotation
 from sop_studio.app import MainWindow
-from sop_studio.capture import CaptureOverlay, GlobalHotkey
+from sop_studio.capture import GlobalHotkey
 from sop_studio.document import Document, Element, Page, load_document, save_document
 from sop_studio.rendering import export_pdf, image_bytes, thumbnail
 from sop_studio.style import apply_style
@@ -210,28 +210,10 @@ class RenderingTests(unittest.TestCase):
             self.assertAlmostEqual(sizes[1][3], 450, delta=1)
         self.assertFalse(thumbnail(document.pages[1], document.assets).isNull())
 
-    def test_high_dpi_region_uses_physical_pixels(self):
-        image = sample_image(800, 600)
-        image.setDevicePixelRatio(2)
-        with patch("sop_studio.capture.grab_desktop", return_value=(image, QRect(0, 0, 400, 300), 2)):
-            overlay = CaptureOverlay()
-            results = []
-            overlay.captured.connect(results.append)
-            overlay.show()
-            flush()
-            QTest.mousePress(overlay, Qt.MouseButton.LeftButton, pos=QPoint(20, 30))
-            QTest.mouseMove(overlay, QPoint(120, 100))
-            QTest.mouseRelease(overlay, Qt.MouseButton.LeftButton, pos=QPoint(120, 100))
-            flush()
-            self.assertEqual(len(results), 1)
-            self.assertEqual(results[0].width(), 202)
-            self.assertEqual(results[0].height(), 142)
-            self.assertEqual(results[0].devicePixelRatio(), 1)
-
     def test_hotkey_validation(self):
         self.assertEqual(GlobalHotkey.parse("Ctrl+1"), (0x4002, ord("1")))
         self.assertEqual(GlobalHotkey.parse("Alt+Shift+F2"), (0x4005, 0x71))
-        for sequence in ["1", "Ctrl+Left", "Ctrl+K, Ctrl+C", ""]:
+        for sequence in ["1", "Ctrl+Left", "Ctrl+K, Ctrl+C", "", "Meta+Shift+S"]:
             with self.subTest(sequence=sequence), self.assertRaises(ValueError):
                 GlobalHotkey.parse(sequence)
 

@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 
 from .annotations import AnnotationWindow
 from .canvas import CanvasView
-from .capture import CaptureOverlay, GlobalHotkey
+from .capture import GlobalHotkey, SystemCapture
 from .controller import DocumentController
 from .document import Document, Element, Page, load_document, new_id, save_document
 from .rendering import export_pdf, image_bytes, thumbnail
@@ -73,10 +73,13 @@ class MainWindow(QMainWindow):
         self.refresh_pending = False
         self.updating_inspector = False
         self.annotation = None
-        self.capture_overlay = None
         self.capture_busy = False
+        self.capture_restore_owned = False
         self.capture_restore_visible = True
         self.capture_restore_minimized = False
+        self.pending_snips = []
+        self.closing = False
+        self.auto_receive_snips = self.settings.value("receive_system_snips", True, type=bool)
         self.element_clipboard = None
         self.resize(1480, 940)
         self.setMinimumSize(1120, 720)
@@ -89,6 +92,11 @@ class MainWindow(QMainWindow):
         self.refresh()
         self.hotkey = GlobalHotkey(self)
         self.hotkey.triggered.connect(self.start_capture)
+        self.system_capture = SystemCapture(self, native=not test_mode)
+        self.system_capture.shortcut_detected.connect(self.external_capture)
+        self.system_capture.image_ready.connect(self.captured)
+        self.system_capture.cancelled.connect(self.cancel_capture)
+        self.system_capture.failed.connect(self.capture_failed)
         if not test_mode:
             sequence = self.settings.value("capture_hotkey", "Ctrl+1")
             try:
@@ -97,7 +105,7 @@ class MainWindow(QMainWindow):
                 sequence = "Ctrl+1"
                 registered = self.hotkey.register(sequence)
             self.capture_shortcut = sequence
-            self.capture_button.setText(f"截图  {sequence}")
+            self.capture_button.setText(f"系统截图  {sequence}")
             if not registered:
                 self.statusBar().showMessage(f"{sequence} 被占用，点击“截图”仍可使用；在“设置”中更换快捷键。", 18000)
             saved_geometry = self.settings.value("window_geometry")
@@ -105,6 +113,7 @@ class MainWindow(QMainWindow):
                 self.restoreGeometry(saved_geometry)
         else:
             self.capture_shortcut = "Ctrl+1"
+        self.system_capture.start()
         self.autosave_timer = QTimer(self)
         self.autosave_timer.setInterval(30000)
         self.autosave_timer.timeout.connect(self.autosave)
@@ -160,7 +169,8 @@ class MainWindow(QMainWindow):
         top.addWidget(self.save_status)
         top.addStretch()
         top.addWidget(self.button("保存", self.save))
-        self.capture_button = self.button("截图  Ctrl+1", self.start_capture, True)
+        self.capture_button = self.button("系统截图  Ctrl+1", self.start_capture, True)
+        self.capture_button.setToolTip("打开 Windows 截图；也可直接按 Win+Shift+S，完成后自动进入标注。")
         top.addWidget(self.capture_button)
         top.addWidget(self.button("导出 PDF", self.export))
         root.addWidget(header)
@@ -292,7 +302,7 @@ class MainWindow(QMainWindow):
         self.inspector_layout.addWidget(self.element_panel)
         self.inspector_layout.addStretch()
         self.section("快速上手")
-        help_text = QLabel("① Ctrl+1 框选屏幕\n② 在悬浮窗下方选择标注工具\n③ Ctrl+Enter 插入文档\n\n拖动元素移动位置\n拖右下角缩放，Shift 自由比例\n双击文字编辑，Ctrl+Enter 完成\n双击图片继续标注\n空格拖动或中键平移画布")
+        help_text = QLabel("① Win+Shift+S 使用系统截图\n② 截图完成后自动打开标注窗\n③ Ctrl+Enter 插入文档\n\nCtrl+1 也可打开系统截图\nCtrl+Shift+V 标注剪贴板图片\n拖动元素移动位置\n拖右下角缩放，Shift 自由比例\n双击文字编辑，Ctrl+Enter 完成\n双击图片继续标注\n空格拖动或中键平移画布")
         help_text.setObjectName("muted")
         help_text.setWordWrap(True)
         self.inspector_layout.addWidget(help_text)
@@ -339,12 +349,18 @@ class MainWindow(QMainWindow):
         self.action(edit, "粘贴", self.paste, "Ctrl+V")
         self.action(edit, "复制元素", self.duplicate_selected, "Ctrl+D")
         insert = self.menuBar().addMenu("插入")
-        self.action(insert, "屏幕截图", self.start_capture)
+        self.action(insert, "Windows 系统截图", self.start_capture)
+        self.action(insert, "标注剪贴板图片", self.annotate_clipboard, "Ctrl+Shift+V")
         self.action(insert, "图片…", self.import_images, "Ctrl+Shift+I")
         self.action(insert, "文本框", self.add_text, "Ctrl+Alt+T")
         self.action(insert, "新页面", self.add_page, "Ctrl+Shift+Return")
         settings = self.menuBar().addMenu("设置")
         self.action(settings, "截图快捷键…", self.change_hotkey)
+        receive = QAction("自动接收 Win+Shift+S 截图", self)
+        receive.setCheckable(True)
+        receive.setChecked(self.auto_receive_snips)
+        receive.toggled.connect(self.set_auto_receive_snips)
+        settings.addAction(receive)
         help_menu = self.menuBar().addMenu("帮助")
         self.action(help_menu, "使用说明", self.show_help)
 
@@ -760,41 +776,69 @@ class MainWindow(QMainWindow):
         self.capture_busy = True
         self.capture_restore_visible = self.isVisible()
         self.capture_restore_minimized = self.isMinimized()
+        self.capture_restore_owned = True
         self.hide()
-        QTimer.singleShot(220, self.show_capture_overlay)
+        self.statusBar().showMessage("等待 Windows 截图完成；Esc 取消。", 60000)
+        self.system_capture.request()
 
-    def show_capture_overlay(self):
-        try:
-            self.capture_overlay = CaptureOverlay()
-            self.capture_overlay.captured.connect(self.captured)
-            self.capture_overlay.cancelled.connect(self.cancel_capture)
-            self.capture_overlay.show()
-            self.capture_overlay.raise_()
-            self.capture_overlay.activateWindow()
-        except Exception as error:
-            self.capture_busy = False
-            self.restore_after_capture()
-            self.error("截图失败", error)
+    def external_capture(self, baseline):
+        if self.closing or not self.auto_receive_snips or self.system_capture.pending:
+            return
+        self.canvas.finish_edit()
+        self.capture_busy = True
+        self.statusBar().showMessage("已检测到 Win+Shift+S，等待截图写入剪贴板…", 60000)
+        self.system_capture.arm(baseline)
+
+    def set_auto_receive_snips(self, enabled):
+        self.auto_receive_snips = enabled
+        if not self.test_mode:
+            self.settings.setValue("receive_system_snips", enabled)
+        if not enabled and not self.capture_restore_owned:
+            self.system_capture.cancel()
+
+    def capture_failed(self, message):
+        logging.warning("Windows screenshot integration: %s", message)
+        self.statusBar().showMessage(f"{message}  可用 Ctrl+Shift+V 手动标注剪贴板图片。", 20000)
 
     def restore_after_capture(self):
+        if not self.capture_restore_owned:
+            return
         if self.capture_restore_minimized:
             self.showMinimized()
         elif self.capture_restore_visible:
             self.show()
 
-    def cancel_capture(self):
-        self.capture_overlay = None
+    def cancel_capture(self, reason="cancelled"):
         self.capture_busy = False
         self.restore_after_capture()
+        self.capture_restore_owned = False
+        self.statusBar().showMessage("截图等待超时，可重新按 Win+Shift+S。" if reason == "timeout" else "已取消截图。", 5000)
 
     def captured(self, image):
-        self.capture_overlay = None
         self.capture_busy = False
-        # Keep the source application visible beneath the floating markup window.
-        self.open_annotation(image)
+        self.pending_snips.append(image.copy())
+        self.statusBar().showMessage("已接收系统截图。", 5000)
+        self.open_next_snip()
+
+    def open_next_snip(self):
+        if self.closing or self.annotation is not None or not self.pending_snips:
+            return
+        if QApplication.activeModalWidget():
+            QTimer.singleShot(200, self.open_next_snip)
+            return
+        self.open_annotation(self.pending_snips.pop(0))
+
+    def annotate_clipboard(self):
+        image = QApplication.clipboard().image()
+        if image.isNull():
+            self.statusBar().showMessage("剪贴板中没有图片。请先用 Win+Shift+S 截图。", 7000)
+            return
+        self.system_capture.cancel()
+        self.captured(image)
 
     def open_annotation(self, image, element_id=None):
-        self.annotation = AnnotationWindow(image, self)
+        # An independent window remains visible even when the document is minimized.
+        self.annotation = AnnotationWindow(image)
         self.annotation.image_ready.connect(lambda result: self.annotation_result(result, element_id))
         self.annotation.finished.connect(self.annotation_closed)
         self.annotation.show()
@@ -821,6 +865,9 @@ class MainWindow(QMainWindow):
         self.annotation = None
         if not self.isVisible():
             self.restore_after_capture()
+        self.capture_restore_owned = False
+        if self.pending_snips and not self.closing:
+            QTimer.singleShot(0, self.open_next_snip)
 
     def annotate_element(self, element_id):
         if self.annotation is not None:
@@ -839,7 +886,7 @@ class MainWindow(QMainWindow):
         if hasattr(editor, "setMaximumSequenceLength"):
             editor.setMaximumSequenceLength(1)
         layout.addWidget(editor)
-        label = QLabel("例如 Ctrl+1、Ctrl+Shift+2、Alt+F2。\n此快捷键在其他应用中也有效。")
+        label = QLabel("例如 Ctrl+1、Ctrl+Shift+2、Alt+F2。\n用于打开 Windows 系统截图。\nWin+Shift+S 由系统处理，无需在此设置。")
         label.setObjectName("muted")
         layout.addWidget(label)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -857,7 +904,7 @@ class MainWindow(QMainWindow):
             return
         self.capture_shortcut = sequence
         self.settings.setValue("capture_hotkey", sequence)
-        self.capture_button.setText(f"截图  {sequence}")
+        self.capture_button.setText(f"系统截图  {sequence}")
         self.statusBar().showMessage(f"截图快捷键已改为 {sequence}", 5000)
 
     def rename_document(self):
@@ -1009,7 +1056,7 @@ class MainWindow(QMainWindow):
             self.clear_recovery()
 
     def show_help(self):
-        QMessageBox.information(self, "SOP Studio · 使用说明", "1. 按截图快捷键（默认 Ctrl+1）框选屏幕区域。\n2. 在悬浮标注窗底部选择箭头、文本框、马赛克或涂鸦。\n3. Ctrl+Enter 插入纵向文档；空间不足时图片自动放入新页。\n4. 拖动元素，拖右下角缩放；双击文字直接编辑。\n5. 保存为 .sopx 可继续编辑，Ctrl+E 导出多页 PDF。\n\nCtrl+V 粘贴图片或文字；Ctrl+D 复制元素。\n方向键微调 1 px，Shift+方向键微调 10 px。\n设置菜单可修改全局截图快捷键。\n\n马赛克和标注插入后合并为图片；文档编辑仍可撤销。")
+        QMessageBox.information(self, "SOP Studio · 使用说明", "1. 直接按 Win+Shift+S，用 Windows 自带工具截图。\n2. 截图写入剪贴板后，自动打开本工具的悬浮标注窗。\n3. 选择箭头、文本框、马赛克或涂鸦，Ctrl+Enter 插入文档。\n4. 拖动元素，拖右下角缩放；双击文字直接编辑。\n5. 保存为 .sopx 可继续编辑，Ctrl+E 导出多页 PDF。\n\nCtrl+1 或截图按钮也会打开 Windows 截图。\nCtrl+Shift+V 可手动标注剪贴板图片。\n设置菜单可关闭自动接收、修改额外截图快捷键。\n\nCtrl+V 粘贴图片或文字；Ctrl+D 复制元素。\n马赛克和标注插入后合并为图片；文档编辑仍可撤销。")
 
     def error(self, title, error):
         logging.error("%s: %s", title, error)
@@ -1022,12 +1069,13 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self.autosave_timer.stop()
+        self.closing = True
+        self.system_capture.stop()
         self.hotkey.unregister()
         QApplication.instance().removeNativeEventFilter(self.hotkey)
         if self.annotation is not None:
             self.annotation.close()
-        if self.capture_overlay is not None:
-            self.capture_overlay.close()
+        self.pending_snips.clear()
         if not self.test_mode:
             self.settings.setValue("window_geometry", self.saveGeometry())
             self.clear_recovery()
