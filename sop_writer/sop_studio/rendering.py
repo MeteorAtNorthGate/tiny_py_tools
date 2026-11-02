@@ -9,10 +9,23 @@ from pathlib import Path
 from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QMarginsF, QRectF, QSizeF, Qt
 from PySide6.QtGui import (
     QAbstractTextDocumentLayout, QColor, QFont, QImage, QPageSize, QPainter,
-    QPainterPath, QPainterPathStroker, QPalette, QPdfWriter, QTextDocument, QTextOption,
+    QPainterPath, QPainterPathStroker, QPalette, QPdfWriter, QTextBlockFormat,
+    QTextCursor, QTextDocument, QTextOption,
 )
 
 from .document import Document, Element, Page
+
+LINE_HEIGHT_FACTOR = 1.2
+
+
+def apply_line_spacing(document: QTextDocument, factor: float = LINE_HEIGHT_FACTOR):
+    """Apply a proportional line height to every block, including new ones."""
+    block_format = QTextBlockFormat()
+    block_format.setLineHeight(factor * 100, QTextBlockFormat.LineHeightTypes.ProportionalHeight)
+    cursor = QTextCursor(document)
+    cursor.select(QTextCursor.SelectionType.Document)
+    cursor.mergeBlockFormat(block_format)
+    cursor.clearSelection()
 
 
 def image_bytes(image: QImage) -> bytes:
@@ -38,6 +51,7 @@ def make_text_document(element: Element) -> QTextDocument:
     option.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
     text.setDefaultTextOption(option)
     text.setPlainText(element.text)
+    apply_line_spacing(text)
     text.setTextWidth(element.width)
     return text
 

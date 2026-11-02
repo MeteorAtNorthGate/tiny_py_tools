@@ -186,8 +186,8 @@ class AnnotationCanvas(QGraphicsView):
         self.inline_frame = None
         self.tool = "arrow"
         self.color = "#ef4444"
-        self.stroke = 4
-        self.font_size = 24
+        self.stroke = 7
+        self.font_size = 32
         scene = QGraphicsScene(self)
         scene.addPixmap(QPixmap.fromImage(image))
         self.markup_layer = AnnotationLayer(self)
@@ -348,7 +348,7 @@ class AnnotationCanvas(QGraphicsView):
         if rect.width() < 8:
             rect.setWidth(min(260, max(32, self.base.width() - rect.x())))
         if rect.height() < 8:
-            rect.setHeight(operation.get("font_size", 24) + 24)
+            rect.setHeight(operation.get("font_size", 32) + 24)
         operation["points"] = [[rect.left(), rect.top()], [rect.right(), rect.bottom()]]
         operation["text"] = ""
         self.inline_frame = InlineTextFrame(self, operation)

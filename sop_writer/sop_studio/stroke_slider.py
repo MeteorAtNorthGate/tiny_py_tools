@@ -13,7 +13,7 @@ class ValueSlider(QSlider):
     sizes. ``suffix`` is appended to the value shown at the right edge.
     """
 
-    def __init__(self, parent=None, *, minimum=1, maximum=50, value=4,
+    def __init__(self, parent=None, *, minimum=1, maximum=50, value=7,
                  ticks=(2, 5, 10, 20), suffix="px", accessible_name="数值",
                  tooltip=""):
         super().__init__(Qt.Orientation.Horizontal, parent)

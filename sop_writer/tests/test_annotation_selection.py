@@ -82,7 +82,7 @@ class AnnotationSelectionTests(unittest.TestCase):
         frame = self.click_text()
         initial_width, initial_height = frame.box.width(), frame.box.height()
         self.assertEqual(initial_width, 260)
-        for actual, expected in zip(frame.operation["points"], [[80, 70], [340, 118]]):
+        for actual, expected in zip(frame.operation["points"], [[80, 70], [340, 126]]):
             self.assertAlmostEqual(actual[0], expected[0], delta=1)
             self.assertAlmostEqual(actual[1], expected[1], delta=1)
         initial_position = frame.box.topLeft()

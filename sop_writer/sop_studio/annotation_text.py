@@ -3,11 +3,13 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QTextDocument, QTextOption
 from PySide6.QtWidgets import QGraphicsObject, QGraphicsTextItem
 
+from .rendering import apply_line_spacing
+
 
 def make_annotation_text(operation):
     rect = QRectF(QPointF(*operation["points"][0]), QPointF(*operation["points"][-1])).normalized()
     font = QFont("Microsoft YaHei UI")
-    font.setPixelSize(operation.get("font_size", 24))
+    font.setPixelSize(operation.get("font_size", 32))
     document = QTextDocument()
     document.setDefaultFont(font)
     document.setDocumentMargin(10)
@@ -16,6 +18,7 @@ def make_annotation_text(operation):
                        else QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
     document.setDefaultTextOption(option)
     document.setPlainText(operation.get("text", ""))
+    apply_line_spacing(document)
     document.setTextWidth(max(32, rect.width()))
     return document
 
