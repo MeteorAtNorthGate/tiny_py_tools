@@ -1022,7 +1022,9 @@ class MainWindow(QMainWindow):
             self.controller.perform("更新图片标注", replace)
         else:
             self.insert_image(image)
-        self.showNormal()
+        # Reveal the document without clearing its maximized state.
+        self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
+        self.show()
         self.raise_()
         self.activateWindow()
 
