@@ -96,3 +96,7 @@ desktop/inspect_edge_agent/riber/riber_csv_agent_config.json
 /Plans/
 .claude/settings.local.json
 .claude/.history*
+
+# Office documents
+~$*.docx
+~$*.xlsx
