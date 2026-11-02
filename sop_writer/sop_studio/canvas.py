@@ -1,12 +1,14 @@
 """Continuous pages and interactive image/text objects."""
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QImage, QKeyEvent, QPainter, QPen, QTextCursor
-from PySide6.QtWidgets import QGraphicsItem, QGraphicsObject, QGraphicsScene, QGraphicsTextItem, QGraphicsView
+from dataclasses import replace
+
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QAbstractTextDocumentLayout, QColor, QImage, QKeyEvent, QPainter, QPalette, QPen, QTextCursor
+from PySide6.QtWidgets import QApplication, QGraphicsItem, QGraphicsObject, QGraphicsScene, QGraphicsTextItem, QGraphicsView
 
 from .document import Element
-from .rendering import make_text_document
+from .rendering import make_text_document, paint_text, paint_text_box, text_glyph_path
 
 
 class EditableText(QGraphicsTextItem):
@@ -16,13 +18,83 @@ class EditableText(QGraphicsTextItem):
         self.setDocument(make_text_document(owner.element))
         self.setDefaultTextColor(QColor(owner.element.color))
         self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        self.glyphs = None
+        self.paint_cache = {}
+        self.composing = False
+        self.preedit_cursor = 0
+        self.cursor_visible = True
+        self.blink = QTimer(self)
+        self.blink.timeout.connect(self.blink_cursor)
+        self.document().contentsChanged.connect(self.invalidate_glyphs)
+
+    def invalidate_glyphs(self):
+        self.glyphs = None
+        self.paint_cache.clear()
+        if self.owner.editing:
+            height = max(self.owner.height, self.document().size().height())
+            if height != self.owner.height:
+                self.owner.prepareGeometryChange()
+                self.owner.height = height
+                self.owner.update()
+        self.update()
+
+    def blink_cursor(self):
+        self.cursor_visible = not self.cursor_visible
+        self.update()
+
+    def paint(self, painter, option, widget=None):
+        element = replace(self.owner.element, width=self.owner.width, height=self.owner.height)
+        if self.glyphs is None and element.text_stroke_width and QColor(element.text_stroke_color).alpha():
+            self.glyphs = text_glyph_path(self.document())
+        paint_text(painter, element, self.document(), self.glyphs, self.paint_cache)
+        if not self.owner.editing:
+            return
+        painter.save()
+        painter.setClipRect(QRectF(0, 0, element.width, element.height), Qt.ClipOperation.IntersectClip)
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            context = QAbstractTextDocumentLayout.PaintContext()
+            context.palette.setColor(QPalette.ColorRole.Text, QColor("transparent"))
+            selection = QAbstractTextDocumentLayout.Selection()
+            selection.cursor = cursor
+            selection.format.setBackground(QColor("#416fe8"))
+            selection.format.setForeground(QColor("white"))
+            context.selections = [selection]
+            self.document().documentLayout().draw(painter, context)
+        if self.hasFocus() and self.cursor_visible:
+            layout = cursor.block().layout()
+            offset = cursor.positionInBlock()
+            if self.composing:
+                offset = max(0, layout.preeditAreaPosition()) + self.preedit_cursor
+            line = layout.lineForTextPosition(offset)
+            if line.isValid():
+                x = line.cursorToX(offset)
+                x = x[0] if isinstance(x, tuple) else x
+                point = layout.position() + QPointF(x, line.y())
+                pen = QPen(QColor("#416fe8"), 1)
+                pen.setCosmetic(True)
+                painter.setPen(pen)
+                painter.drawLine(point, point + QPointF(0, line.height()))
+        painter.restore()
+
+    def inputMethodEvent(self, event):
+        self.composing = bool(event.preeditString())
+        self.preedit_cursor = len(event.preeditString())
+        for attribute in event.attributes():
+            if attribute.type == event.AttributeType.Cursor:
+                self.preedit_cursor = attribute.start
+        super().inputMethodEvent(event)
+        self.cursor_visible = True
+        self.invalidate_glyphs()
 
     def focusOutEvent(self, event):
         super().focusOutEvent(event)
         self.owner.finish_text_edit()
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key.Key_Escape or (event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+        self.cursor_visible = True
+        self.update()
+        if not self.composing and (event.key() == Qt.Key.Key_Escape or (event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and event.modifiers() & Qt.KeyboardModifier.ControlModifier)):
             self.clearFocus()
             event.accept()
         else:
@@ -50,11 +122,13 @@ class ElementItem(QGraphicsObject):
 
     def paint(self, painter, option, widget=None):
         bounds = QRectF(0, 0, self.width, self.height)
-        if self.element.background != "transparent":
-            painter.fillRect(bounds, QColor(self.element.background))
         if self.image is not None:
+            if self.element.background != "transparent":
+                painter.fillRect(bounds, QColor(self.element.background))
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
             painter.drawImage(bounds, self.image)
+        else:
+            paint_text_box(painter, replace(self.element, width=self.width, height=self.height))
         if self.isSelected():
             pen = QPen(QColor("#4778ed"), 1.5)
             pen.setCosmetic(True)
@@ -95,6 +169,7 @@ class ElementItem(QGraphicsObject):
             self.width, self.height = min(width, 24000), min(height, 24000)
             if self.text_item:
                 self.text_item.setTextWidth(self.width)
+                self.text_item.invalidate_glyphs()
             self.update()
             event.accept()
         else:
@@ -120,6 +195,9 @@ class ElementItem(QGraphicsObject):
         self.text_item.setTextInteractionFlags(Qt.TextInteractionFlag.TextEditorInteraction)
         self.text_item.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
         self.text_item.setFocus(Qt.FocusReason.MouseFocusReason)
+        self.text_item.cursor_visible = True
+        if QApplication.cursorFlashTime() > 0:
+            self.text_item.blink.start(max(100, QApplication.cursorFlashTime() // 2))
         cursor = self.text_item.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         self.text_item.setTextCursor(cursor)
@@ -128,6 +206,7 @@ class ElementItem(QGraphicsObject):
         if not self.editing:
             return
         self.editing = False
+        self.text_item.blink.stop()
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
         self.text_item.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         self.text_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
@@ -344,6 +423,11 @@ class CanvasView(QGraphicsView):
             event.accept()
         elif event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             self.delete_requested.emit()
+        elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_F2):
+            item = self.items_by_id.get(self.selected_id())
+            if item and item.text_item:
+                item.start_text_edit()
+            event.accept()
         elif event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
             step = 10 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 1
             dx = step * ((event.key() == Qt.Key.Key_Right) - (event.key() == Qt.Key.Key_Left))

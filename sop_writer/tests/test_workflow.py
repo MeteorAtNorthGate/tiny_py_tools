@@ -218,6 +218,24 @@ class RenderingTests(unittest.TestCase):
             with self.subTest(sequence=sequence), self.assertRaises(ValueError):
                 GlobalHotkey.parse(sequence)
 
+    def test_pdf_exports_all_text_outline_positions_and_independent_opacity(self):
+        page = Page(width=600, height=600)
+        for index, alignment in enumerate(("outside", "center", "inside")):
+            page.elements.append(Element(text="描边文字 Outline", x=24, y=24 + index * 150,
+                                         width=540, height=120, font_size=36, color="#ffffff",
+                                         text_stroke_color="#3366ee", text_stroke_width=2,
+                                         text_stroke_alignment=alignment, text_opacity=.6 if index == 1 else 1,
+                                         background="#ffddaa", box_stroke_color="#cc8855",
+                                         box_stroke_width=3, box_opacity=.4))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "文字样式.pdf"
+            export_pdf(Document(pages=[page]), path)
+            content = path.read_bytes()
+            self.assertTrue(content.startswith(b"%PDF-"))
+            self.assertEqual(len(re.findall(rb"/Type\s*/Page\b", content)), 1)
+            # The translucent outlined text is one composited layer with alpha.
+            self.assertIn(b"/SMask", content)
+
 
 if __name__ == "__main__":
     unittest.main()

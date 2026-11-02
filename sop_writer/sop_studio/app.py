@@ -9,8 +9,8 @@ from pathlib import Path
 from PySide6.QtCore import QSettings, QSize, QStandardPaths, Qt, QTimer
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QImage, QImageReader, QKeySequence, QPixmap, QTextCursor
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox,
-    QDoubleSpinBox, QFileDialog, QFontComboBox, QFormLayout, QHBoxLayout,
+    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+    QFileDialog, QFormLayout, QGridLayout, QHBoxLayout,
     QInputDialog, QKeySequenceEdit, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMainWindow, QMessageBox, QPushButton, QScrollArea, QSpinBox, QSplitter,
     QToolBar, QVBoxLayout, QWidget,
@@ -21,6 +21,7 @@ from .canvas import CanvasView
 from .capture import GlobalHotkey, SystemCapture
 from .controller import DocumentController
 from .document import Document, Element, Page, load_document, new_id, save_document
+from .inspector_controls import ChoiceInput, ColorInput, FontPicker, IntegerInput, NumberInput
 from .rendering import export_pdf, image_bytes, thumbnail
 from .style import apply_style
 
@@ -228,8 +229,8 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.canvas)
         inspector_scroll = QScrollArea()
         inspector_scroll.setWidgetResizable(True)
-        inspector_scroll.setMinimumWidth(238)
-        inspector_scroll.setMaximumWidth(290)
+        inspector_scroll.setMinimumWidth(270)
+        inspector_scroll.setMaximumWidth(320)
         inspector = QWidget()
         inspector.setObjectName("inspector")
         self.inspector_layout = QVBoxLayout(inspector)
@@ -255,17 +256,23 @@ class MainWindow(QMainWindow):
         self.element_panel = QWidget()
         panel = QVBoxLayout(self.element_panel)
         panel.setContentsMargins(0, 0, 0, 0)
-        form = QFormLayout()
+        form = QGridLayout()
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(4)
         self.geometry_inputs = {}
-        for name, label in [("x", "X"), ("y", "Y"), ("width", "宽度"), ("height", "高度")]:
-            spin = QDoubleSpinBox()
+        for index, (name, label) in enumerate([("x", "X"), ("y", "Y"), ("width", "宽度"), ("height", "高度")]):
+            spin = NumberInput()
             spin.setRange(0 if name in ("x", "y") else 8, 24000)
             spin.setDecimals(1)
             spin.setSuffix(" px")
-            spin.setKeyboardTracking(False)
             spin.editingFinished.connect(lambda field=name: self.apply_geometry(field))
+            spin.setAccessibleName(label)
             self.geometry_inputs[name] = spin
-            form.addRow(label, spin)
+            row, column = (index // 2) * 2, index % 2
+            form.addWidget(QLabel(label), row, column)
+            form.addWidget(spin, row + 1, column)
+        form.setColumnStretch(0, 1)
+        form.setColumnStretch(1, 1)
         panel.addLayout(form)
         self.lock_ratio = QCheckBox("缩放时锁定图片比例")
         self.lock_ratio.setChecked(True)
@@ -281,34 +288,72 @@ class MainWindow(QMainWindow):
         self.text_style = QWidget()
         text_form = QFormLayout(self.text_style)
         text_form.setContentsMargins(0, 8, 0, 0)
-        self.font_family = QFontComboBox()
+        text_form.setVerticalSpacing(8)
+        text_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        self.font_family = FontPicker()
         self.font_family.currentFontChanged.connect(self.apply_font)
         text_form.addRow("字体", self.font_family)
-        self.font_size = QSpinBox()
+        self.font_size = IntegerInput()
         self.font_size.setRange(6, 256)
-        self.font_size.setKeyboardTracking(False)
         self.font_size.editingFinished.connect(self.apply_font)
         text_form.addRow("字号", self.font_size)
         self.bold = QCheckBox("加粗")
         self.bold.clicked.connect(self.apply_font)
         text_form.addRow("", self.bold)
-        text_form.addRow("", self.button("文字颜色", self.choose_text_color))
-        text_form.addRow("", self.button("编辑文字", self.edit_selected_text))
+        self.text_color_inputs = {}
+        self.text_effect_inputs = {}
+
+        def group(title):
+            label = QLabel(title)
+            label.setObjectName("propertyGroup")
+            text_form.addRow(label)
+
+        def color_field(field, label, title):
+            control = ColorInput(title)
+            control.valueChanged.connect(lambda value, key=field: self.apply_text_effect(key, value))
+            self.text_color_inputs[field] = control
+            text_form.addRow(label, control)
+
+        def numeric_field(field, label, maximum, suffix, integer=False):
+            control = IntegerInput() if integer else NumberInput()
+            control.setRange(0, maximum)
+            control.setSuffix(suffix)
+            control.setAccessibleName(label)
+            control.editingFinished.connect(lambda key=field, widget=control:
+                                           self.apply_text_effect(key, widget.value() / 100 if key.endswith("opacity") else widget.value()))
+            self.text_effect_inputs[field] = control
+            text_form.addRow(label, control)
+
+        group("文字")
+        color_field("color", "颜色", "文本颜色")
+        color_field("text_stroke_color", "描边", "文本描边颜色")
+        numeric_field("text_stroke_width", "描边宽度", 50, " px")
+        self.text_stroke_alignment = ChoiceInput()
+        for title, value in [("向外", "outside"), ("居中", "center"), ("向内", "inside")]:
+            self.text_stroke_alignment.addItem(title, value)
+        self.text_stroke_alignment.currentIndexChanged.connect(lambda:
+            self.apply_text_effect("text_stroke_alignment", self.text_stroke_alignment.currentData()))
+        text_form.addRow("描边位置", self.text_stroke_alignment)
+        numeric_field("text_opacity", "不透明度", 100, " %", integer=True)
+
+        group("文本框")
+        color_field("background", "填充", "文本框填充色")
+        color_field("box_stroke_color", "描边", "文本框描边颜色")
+        numeric_field("box_stroke_width", "描边宽度", 50, " px")
+        numeric_field("box_opacity", "不透明度", 100, " %", integer=True)
         panel.addWidget(self.text_style)
         self.annotate_button = self.button("标注图片", lambda: self.annotate_element(self.canvas.selected_id()))
         panel.addWidget(self.annotate_button)
-        panel.addWidget(self.button("复制元素  Ctrl+D", self.duplicate_selected))
-        panel.addWidget(self.button("删除元素  Delete", self.delete_selected))
         self.inspector_layout.addWidget(self.element_panel)
         self.inspector_layout.addStretch()
         self.section("快速上手")
-        help_text = QLabel("① Win+Shift+S 使用系统截图\n② 截图完成后自动打开标注窗\n③ Ctrl+Enter 插入文档\n\nCtrl+1 也可打开系统截图\nCtrl+Shift+V 标注剪贴板图片\n拖动元素移动位置\n拖右下角缩放，Shift 自由比例\n双击文字编辑，Ctrl+Enter 完成\n双击图片继续标注\n空格拖动或中键平移画布")
+        help_text = QLabel("① Win+Shift+S 使用系统截图\n② 截图完成后自动打开标注窗\n③ Ctrl+Enter 插入文档\n\nCtrl+1 也可打开系统截图\nCtrl+Shift+V 标注剪贴板图片\n拖动元素移动位置\n拖右下角缩放，Shift 自由比例\nEnter / 双击文字编辑\nCtrl+Enter 完成文字编辑\nCtrl+J 复制元素，Delete 删除\n双击图片继续标注\n空格拖动或中键平移画布")
         help_text.setObjectName("muted")
         help_text.setWordWrap(True)
         self.inspector_layout.addWidget(help_text)
         inspector_scroll.setWidget(inspector)
         splitter.addWidget(inspector_scroll)
-        splitter.setSizes([184, 1030, 266])
+        splitter.setSizes([184, 1000, 296])
         splitter.setStretchFactor(1, 1)
         splitter.setChildrenCollapsible(False)
         root.addWidget(splitter, 1)
@@ -347,7 +392,7 @@ class MainWindow(QMainWindow):
         edit.addSeparator()
         self.action(edit, "复制", self.copy_selected, "Ctrl+C")
         self.action(edit, "粘贴", self.paste, "Ctrl+V")
-        self.action(edit, "复制元素", self.duplicate_selected, "Ctrl+D")
+        self.action(edit, "复制元素", self.duplicate_selected, "Ctrl+J")
         insert = self.menuBar().addMenu("插入")
         self.action(insert, "Windows 系统截图", self.start_capture)
         self.action(insert, "标注剪贴板图片", self.annotate_clipboard, "Ctrl+Shift+V")
@@ -439,6 +484,12 @@ class MainWindow(QMainWindow):
         self.font_family.setCurrentFont(QFont(element.font_family))
         self.font_size.setValue(element.font_size)
         self.bold.setChecked(element.bold)
+        for field, control in self.text_color_inputs.items():
+            control.setValue(getattr(element, field))
+        for field, control in self.text_effect_inputs.items():
+            value = getattr(element, field)
+            control.setValue(round(value * 100) if field.endswith("opacity") else value)
+        self.text_stroke_alignment.setCurrentIndex(self.text_stroke_alignment.findData(element.text_stroke_alignment))
         self.updating_inspector = False
 
     def selected(self):
@@ -498,12 +549,18 @@ class MainWindow(QMainWindow):
 
         self.mutate_selected("调整文字样式", change)
 
-    def choose_text_color(self):
-        found = self.selected()
-        if found:
-            color = QColorDialog.getColor(QColor(found[1].color), self, "文字颜色")
-            if color.isValid():
-                self.mutate_selected("调整文字颜色", lambda p, e: setattr(e, "color", color.name()))
+    def apply_text_effect(self, field, value):
+        if self.updating_inspector:
+            return
+
+        def change(page, element):
+            if element.kind != "text":
+                return
+            setattr(element, field, value)
+            from .rendering import make_text_document
+            element.height = max(element.height, make_text_document(element).size().height())
+
+        self.mutate_selected("调整文字外观", change)
 
     def center_selected(self):
         self.mutate_selected("水平居中", lambda p, e: setattr(e, "x", max(0, (p.width - e.width) / 2)))
@@ -527,12 +584,6 @@ class MainWindow(QMainWindow):
             element.x = max(0, min(page.width - 24, element.x + dx))
             element.y = max(0, min(page.height - 24, element.y + dy))
         self.mutate_selected("微调位置", change)
-
-    def edit_selected_text(self):
-        item = self.canvas.items_by_id.get(self.canvas.selected_id())
-        if item and item.text_item:
-            self.canvas.setFocus()
-            item.start_text_edit()
 
     def delete_selected(self):
         if self.canvas.editing_item():
@@ -1056,7 +1107,7 @@ class MainWindow(QMainWindow):
             self.clear_recovery()
 
     def show_help(self):
-        QMessageBox.information(self, "SOP Studio · 使用说明", "1. 直接按 Win+Shift+S，用 Windows 自带工具截图。\n2. 截图写入剪贴板后，自动打开本工具的悬浮标注窗。\n3. 选择箭头、文本框、马赛克或涂鸦，Ctrl+Enter 插入文档。\n4. 拖动元素，拖右下角缩放；双击文字直接编辑。\n5. 保存为 .sopx 可继续编辑，Ctrl+E 导出多页 PDF。\n\nCtrl+1 或截图按钮也会打开 Windows 截图。\nCtrl+Shift+V 可手动标注剪贴板图片。\n设置菜单可关闭自动接收、修改额外截图快捷键。\n\nCtrl+V 粘贴图片或文字；Ctrl+D 复制元素。\n马赛克和标注插入后合并为图片；文档编辑仍可撤销。")
+        QMessageBox.information(self, "SOP Studio · 使用说明", "1. 直接按 Win+Shift+S，用 Windows 自带工具截图。\n2. 截图写入剪贴板后，自动打开本工具的悬浮标注窗。\n3. 选择箭头、文本框、马赛克或涂鸦，Ctrl+Enter 插入文档。\n4. 拖动元素，拖右下角缩放；双击文字或选中后按 Enter 编辑。\n5. 右栏直接输入精确数值，分别调整文字与文本框的颜色、描边和不透明度。\n6. 保存为 .sopx 可继续编辑，Ctrl+E 导出多页 PDF。\n\nCtrl+1 或截图按钮也会打开 Windows 截图。\nCtrl+Shift+V 可手动标注剪贴板图片。\n设置菜单可关闭自动接收、修改额外截图快捷键。\n\nCtrl+V 粘贴图片或文字；Ctrl+J 复制元素，Delete 删除。\n马赛克和标注插入后合并为图片；文档编辑仍可撤销。")
 
     def error(self, title, error):
         logging.error("%s: %s", title, error)

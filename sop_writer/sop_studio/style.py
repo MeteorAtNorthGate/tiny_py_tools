@@ -20,10 +20,15 @@ QWidget#sidebar, QWidget#inspector { background: #f8fafe; }
 QWidget#annotationBar { background: #f8fafe; }
 QLabel#brand { color: #416fe8; font-size: 17px; font-weight: 800; }
 QLabel#section { color: #758299; font-size: 11px; font-weight: 600; padding-top: 12px; padding-bottom: 5px; }
+QLabel#propertyGroup { color: #64758f; font-size: 11px; font-weight: 600; padding-top: 10px; padding-bottom: 2px; }
 QLabel#muted { color: #8490a3; font-size: 11px; padding: 5px 0; }
 QLabel#saved { color: #7a899f; font-size: 11px; }
+QLabel#inputUnit { color: #91a0b5; background: transparent; font-size: 11px; }
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QKeySequenceEdit { background: white; border: 1px solid #dce3ee; border-radius: 5px; padding: 6px; selection-background-color: #6a8ee8; }
 QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus { border-color: #628bea; }
+QComboBox#inspectorCombo { padding-right: 26px; }
+QComboBox#inspectorCombo::drop-down { border: none; width: 26px; }
+QComboBox#inspectorCombo::down-arrow { image: none; border: none; }
 QLineEdit#documentTitle { border: 1px solid transparent; font-size: 15px; font-weight: 600; background: transparent; }
 QLineEdit#documentTitle:focus { border-color: #9bb6f2; background: #f8faff; }
 QListWidget { background: transparent; border: none; outline: none; padding: 5px; }

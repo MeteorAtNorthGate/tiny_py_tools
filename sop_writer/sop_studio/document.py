@@ -31,6 +31,13 @@ class Element:
     color: str = "#243247"
     bold: bool = False
     background: str = "transparent"
+    text_stroke_color: str = "transparent"
+    text_stroke_width: float = 1
+    text_stroke_alignment: str = "outside"
+    text_opacity: float = 1
+    box_stroke_color: str = "transparent"
+    box_stroke_width: float = 1
+    box_opacity: float = 1
 
 
 @dataclass
@@ -95,8 +102,15 @@ def validate(document: Document) -> None:
                 raise ValueError("字号无效。")
             if not isinstance(element.text, str) or len(element.text) > 400000:
                 raise ValueError("文本内容无效或过长。")
-            if not all(isinstance(v, str) for v in (element.font_family, element.color, element.background)):
+            if not all(isinstance(v, str) for v in (element.font_family, element.color, element.background,
+                                                    element.text_stroke_color, element.box_stroke_color)):
                 raise ValueError("文字样式无效。")
+            if element.text_stroke_alignment not in ("outside", "center", "inside"):
+                raise ValueError("文字描边位置无效。")
+            if any(not _number(value, 0, 1) for value in (element.text_opacity, element.box_opacity)):
+                raise ValueError("不透明度应在 0～100% 之间。")
+            if any(not _number(value, 0, 50) for value in (element.text_stroke_width, element.box_stroke_width)):
+                raise ValueError("描边宽度应在 0～50 像素之间。")
             if element.kind == "image" and element.asset not in document.assets:
                 raise ValueError("文档中的图片缺失。")
 

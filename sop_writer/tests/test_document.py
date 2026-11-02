@@ -20,7 +20,11 @@ class DocumentTests(unittest.TestCase):
         png = b"\x89PNG\r\n\x1a\nembedded-image"
         asset = document.add_asset(png)
         document.add_asset(b"unused image from history")
-        document.pages[0].elements = [Element(text="第一步\n确认设备", bold=True, color="#1a2b3c"),
+        document.pages[0].elements = [Element(text="第一步\n确认设备", bold=True, color="#1a2b3c",
+                                            text_stroke_color="#3366ee", text_stroke_width=2.5,
+                                            text_stroke_alignment="inside", text_opacity=.75,
+                                            background="#ffeecc", box_stroke_color="#cc8844",
+                                            box_stroke_width=3, box_opacity=.45),
                                        Element(kind="image", asset=asset, width=300, height=240)]
         document.pages.append(Page(width=1440, height=900, elements=[Element(text="完成。")]))
         save_document(document, self.path)
@@ -73,6 +77,27 @@ class DocumentTests(unittest.TestCase):
             archive.writestr(f"assets/{key}.png", b"\x89PNG\r\n\x1a\nmodified")
         with self.assertRaisesRegex(ValueError, "校验"):
             load_document(self.path)
+
+    def test_old_documents_supply_default_text_effects(self):
+        from dataclasses import asdict
+        page = Page(elements=[Element(text="旧文档", background="#ffccaa")])
+        raw = asdict(page)
+        for field in ("text_stroke_color", "text_stroke_width", "text_stroke_alignment", "text_opacity",
+                      "box_stroke_color", "box_stroke_width", "box_opacity"):
+            del raw["elements"][0][field]
+        with zipfile.ZipFile(self.path, "w") as archive:
+            archive.writestr("document.json", json.dumps({"format": "sop-studio", "version": 1,
+                                                          "title": "旧文档", "pages": [raw]}))
+        self.assertEqual(load_document(self.path).pages[0], page)
+
+    def test_invalid_effect_values_are_rejected_before_writing(self):
+        for field, value in [("text_opacity", -1), ("box_opacity", 1.01), ("text_opacity", float("nan")),
+                             ("text_stroke_width", 51), ("box_stroke_width", -1),
+                             ("text_stroke_alignment", "invalid")]:
+            with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                element = Element()
+                setattr(element, field, value)
+                save_document(Document(pages=[Page(elements=[element])]), self.path)
 
 
 if __name__ == "__main__":
